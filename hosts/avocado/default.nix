@@ -8,6 +8,7 @@
     ./disko.nix
     ../../modules/base.nix
     ../../modules/ssh.nix
+    ../../modules/nh.nix
     ../../modules/sops.nix
     ../../modules/zfs.nix
     ../../modules/desktop.nix
