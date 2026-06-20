@@ -10,6 +10,7 @@
     ../../modules/ssh.nix
     ../../modules/sops.nix
     ../../modules/zfs.nix
+    ../../modules/desktop.nix
     ../../modules/tailscale.nix
     ../../users/rithviknishad.nix
   ];
