@@ -2,3 +2,7 @@ result
 result-*
 .direnv/
 .pre-commit-config.yaml
+
+# CI age private key (lives in a Tangled secret, never in git)
+ci-age-key.txt
+*.agekey

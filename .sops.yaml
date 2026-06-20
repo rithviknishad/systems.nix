@@ -4,9 +4,11 @@
 # Recipients:
 #   admin   -> ~/.config/sops/age/keys.txt  (edit secrets from your Mac)
 #   avocado -> /var/lib/sops-nix/key.txt     (host decrypts at activation)
+#   ci      -> Tangled secret SOPS_AGE_KEY   (spindle decrypts CI secrets)
 keys:
   - &admin age1lfwpymp7pwv0tcgyrvmtamz6stzcrkazvvmvmpkknfl59h88d5uq7p5j0k
   - &avocado age1yhw9dwuqnjxlcuntvmd2ce2fnaenkfym2zvkj2caq4h6rscwys9qh0na3k
+  - &ci age1vjdr4zfeycz34kdxrtzttj97wkkn5ltpv0q63kwd76zd48tpaghqna8pjs
 
 creation_rules:
   - path_regex: secrets/avocado\.yaml$
@@ -14,3 +16,10 @@ creation_rules:
       - age:
           - *admin
           - *avocado
+
+  # CI secrets: admin edits from the Mac, the Tangled spindle decrypts.
+  - path_regex: secrets/ci\.yaml$
+    key_groups:
+      - age:
+          - *admin
+          - *ci

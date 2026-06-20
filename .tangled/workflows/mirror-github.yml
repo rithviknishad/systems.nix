@@ -1,0 +1,64 @@
+# Mirror this repository to github.com/rithviknishad/systems.nix
+#
+# Runs on every push to `main` and force-pushes the branch + tags to GitHub,
+# keeping the GitHub copy byte-for-byte in sync with Tangled.
+#
+# Secrets are SOPS-encrypted in-repo (secrets/ci.yaml). The only secret stored
+# on Tangled is the CI age private key, so the GitHub PAT never leaves the repo
+# in plaintext.
+#
+# One-time setup (see README "Mirroring to GitHub"):
+#   1. Create the (empty) repo github.com/rithviknishad/systems.nix
+#   2. Put a fine-grained GitHub PAT (Contents: Read and write, that repo only)
+#      into secrets/ci.yaml under github.mirror-token  (`just secrets-ci`).
+#   3. Tangled repo -> settings -> pipelines:
+#        - pick a spindle (e.g. spindle.tangled.sh)
+#        - add a secret named SOPS_AGE_KEY holding the CI age PRIVATE key
+#          (the `AGE-SECRET-KEY-...` line from ci-age-key.txt).
+#   4. Commit & push; watch the run under the repo's "pipelines" tab.
+
+when:
+  - event: ["push"]
+    branch: ["main"]
+
+engine: "nixery"
+
+clone:
+  depth: 0 # full history; a shallow clone cannot push a complete mirror
+
+dependencies:
+  nixpkgs:
+    - git
+    - cacert
+    - sops
+    - coreutils
+
+steps:
+  - name: Push to GitHub mirror
+    command: |
+      set -eu
+
+      export GIT_TERMINAL_PROMPT=0
+      # cacert ships its bundle here in the nixery image
+      export GIT_SSL_CAINFO=/etc/ssl/certs/ca-bundle.crt
+      export GIT_SSL_CAPATH=/etc/ssl/certs
+
+      # The token is kept out of argv, the remote URL, and process listings so
+      # it cannot leak into logs -- not even under git trace/verbose output,
+      # which prints the remote URL verbatim and would expose creds-in-URL.
+      # It lives only in a shell variable (built-ins, never exec'd) and a
+      # 0600 credentials file that git reads via the `store` helper; git
+      # redacts the resulting Authorization header in all trace output.
+      cred="$(mktemp)"
+      chmod 600 "$cred"
+
+      # sops reads the age private key straight from $SOPS_AGE_KEY
+      token="$(sops --decrypt --extract '["github"]["mirror-token"]' secrets/ci.yaml)"
+      printf 'https://x-access-token:%s@github.com\n' "$token" > "$cred"
+      unset token
+
+      remote="https://github.com/rithviknishad/systems.nix.git"
+      git -c credential.helper="store --file=$cred" push --force "$remote" HEAD:refs/heads/main
+      git -c credential.helper="store --file=$cred" push --force --tags "$remote"
+
+      rm -f "$cred"

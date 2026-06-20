@@ -8,6 +8,7 @@ target_ip   := "192.168.165.202"
 target      := "root@" + target_ip
 user_target := "rithviknishad@" + target_ip
 secrets     := "secrets/avocado.yaml"
+ci_secrets  := "secrets/ci.yaml"
 
 # Avoid stale known_hosts entries when deploying to the box.
 export NIX_SSHOPTS := "-o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no"
@@ -55,6 +56,24 @@ secrets-show:
 # Re-encrypt secrets after changing recipients in .sops.yaml.
 secrets-rekey:
     sops updatekeys {{secrets}}
+
+# Edit the encrypted CI secrets file (GitHub mirror PAT, etc.).
+secrets-ci:
+    sops {{ci_secrets}}
+
+# View decrypted CI secrets (be mindful of your screen).
+secrets-ci-show:
+    sops --decrypt {{ci_secrets}}
+
+# Re-encrypt CI secrets after changing recipients in .sops.yaml.
+secrets-ci-rekey:
+    sops updatekeys {{ci_secrets}}
+
+# Generate a fresh CI age keypair (private key -> ci-age-key.txt, gitignored).
+# Then: add the public key to .sops.yaml as `&ci`, `just secrets-ci-rekey`, and
+# upload the private key as Tangled secret SOPS_AGE_KEY.
+ci-keygen:
+    age-keygen -o ci-age-key.txt
 
 # Generate a SHA-512 password hash to paste into secrets.
 passwd:
