@@ -51,6 +51,19 @@
         ];
       };
 
+      # Standalone Home Manager config, so `nh home switch` works for
+      # home-only iteration without a full `nixos-rebuild`. The same
+      # ./home/rithviknishad module is also deployed system-wide via
+      # modules/home-manager.nix during `nh os switch`.
+      homeConfigurations."rithviknishad@avocado" = inputs.home-manager.lib.homeManagerConfiguration {
+        pkgs = import nixpkgs {
+          system = "x86_64-linux";
+          config.allowUnfree = true;
+        };
+        extraSpecialArgs = { inherit inputs; };
+        modules = [ ./home/rithviknishad ];
+      };
+
       # `nix develop` — everything needed to work with this repo.
       devShells = forAllSystems (
         system:

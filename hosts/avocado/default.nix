@@ -19,9 +19,9 @@
 
   networking.hostName = "avocado";
 
-  # Primary LAN NIC uses DHCP (matches the current Ubuntu setup).
-  networking.useDHCP = false;
-  networking.interfaces.enp2s0.useDHCP = true;
+  # Use NetworkManager (pulled in by the desktop module) for DHCP on all
+  # interfaces, with a GUI widget in the GNOME shell.
+  networking.networkmanager.enable = true;
 
   # The NixOS release this config was authored against. Do not change
   # casually after install — it governs stateful defaults.
