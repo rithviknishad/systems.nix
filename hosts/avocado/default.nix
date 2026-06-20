@@ -11,6 +11,7 @@
     ../../modules/sops.nix
     ../../modules/zfs.nix
     ../../modules/desktop.nix
+    ../../modules/home-manager.nix
     ../../modules/tailscale.nix
     ../../users/rithviknishad.nix
   ];

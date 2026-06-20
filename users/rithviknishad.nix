@@ -5,6 +5,10 @@
 {
   users.mutableUsers = false;
 
+  # zsh is configured per-user via Home Manager; enable it at the system
+  # level so it can be a valid login shell.
+  programs.zsh.enable = true;
+
   users.users.rithviknishad = {
     isNormalUser = true;
     description = "Rithvik Nishad";
@@ -12,7 +16,7 @@
       "wheel"
       "networkmanager"
     ];
-    shell = pkgs.bash;
+    shell = pkgs.zsh;
     # Password hash comes from sops (secrets/avocado.yaml). Enables console
     # login + sudo. Edit it with: sops secrets/avocado.yaml
     hashedPasswordFile = config.sops.secrets."users/rithviknishad/hashed-password".path;

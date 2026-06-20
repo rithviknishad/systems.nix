@@ -14,6 +14,11 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
+    home-manager = {
+      url = "github:nix-community/home-manager";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+
     # Used as: nix run github:nix-community/nixos-anywhere
     nixos-anywhere = {
       url = "github:nix-community/nixos-anywhere";

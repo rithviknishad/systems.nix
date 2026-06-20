@@ -40,7 +40,6 @@
   ];
 
   environment.systemPackages = with pkgs; [
-    firefox
     gnome-tweaks
   ];
 
