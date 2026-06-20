@@ -55,11 +55,13 @@
         {
           default = pkgs.mkShellNoCC {
             packages = [
+              pkgs.just
+              pkgs.nixos-rebuild
               pkgs.sops
               pkgs.age
               pkgs.ssh-to-age
               pkgs.mkpasswd
-              pkgs.nixfmt-rfc-style
+              pkgs.nixfmt
               pkgs.git
               inputs.nixos-anywhere.packages.${system}.default
             ];
@@ -76,6 +78,6 @@
       );
 
       # `nix fmt`
-      formatter = forAllSystems (system: nixpkgs.legacyPackages.${system}.nixfmt-rfc-style);
+      formatter = forAllSystems (system: nixpkgs.legacyPackages.${system}.nixfmt);
     };
 }

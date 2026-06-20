@@ -57,6 +57,24 @@ Enter the dev shell first — it puts `sops`, `age`, `ssh-to-age`, `mkpasswd`,
 nix develop           # or: direnv allow  (auto-loads via .envrc)
 ```
 
+Inside the shell, common tasks are wrapped in a `justfile` — run `just` to list
+them:
+
+| Command | Action |
+|---|---|
+| `just deploy` | build on the box + activate (`switch`) |
+| `just boot` | stage for next boot (safe for risky changes) |
+| `just dry` | preview what would change |
+| `just rollback` | revert the box to the previous generation |
+| `just eval` | evaluate the config locally (no build) |
+| `just secrets` | edit `secrets/avocado.yaml` |
+| `just passwd` | generate a SHA-512 password hash |
+| `just generations` | list the box's generations |
+| `just ssh` / `just ssh-root` | SSH into the box |
+| `just logs [unit]` | tail the box's journal |
+| `just update [input]` | update flake inputs |
+| `just fmt` | format Nix files |
+
 Secrets are stored encrypted in `secrets/avocado.yaml`, keyed by age recipients
 in `.sops.yaml`:
 
