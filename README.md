@@ -48,6 +48,30 @@ nix run github:nix-community/nixos-anywhere -- \
 `--build-on remote` builds on the target (x86_64), avoiding a cross-build from
 this arm64 Mac.
 
+## Secrets (sops-nix + age)
+
+Secrets are stored encrypted in `secrets/avocado.yaml`, keyed by age recipients
+in `.sops.yaml`:
+
+- **admin** key: `~/.config/sops/age/keys.txt` (this Mac) — edit secrets
+- **host** key: `avocado:/var/lib/sops-nix/key.txt` — decrypts at boot
+
+Edit secrets:
+
+```sh
+export SOPS_AGE_KEY_FILE=~/.config/sops/age/keys.txt
+nix shell nixpkgs#sops -c sops secrets/avocado.yaml
+```
+
+Generate a login/sudo password hash to paste in:
+
+```sh
+nix shell nixpkgs#mkpasswd -c mkpasswd -m sha-512
+```
+
+Wiring: `users/rithviknishad.nix` reads the hash via
+`config.sops.secrets."users/rithviknishad/hashed-password".path`.
+
 ## Day-2 workflow
 
 ```sh
