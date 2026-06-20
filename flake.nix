@@ -9,6 +9,11 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
+    sops-nix = {
+      url = "github:Mic92/sops-nix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+
     # Used as: nix run github:nix-community/nixos-anywhere
     nixos-anywhere = {
       url = "github:nix-community/nixos-anywhere";

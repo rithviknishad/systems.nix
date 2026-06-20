@@ -1,7 +1,7 @@
 #
 # User: rithviknishad
 #
-{ pkgs, ... }:
+{ config, pkgs, ... }:
 {
   users.mutableUsers = false;
 
@@ -13,14 +13,13 @@
       "networkmanager"
     ];
     shell = pkgs.bash;
+    # Password hash comes from sops (secrets/avocado.yaml). Enables console
+    # login + sudo. Edit it with: sops secrets/avocado.yaml
+    hashedPasswordFile = config.sops.secrets."users/rithviknishad/hashed-password".path;
     openssh.authorizedKeys.keys = [
       "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPaqSwO7pnIjLIbiR2ApU8s73EI8Sya/Kd0orKci8dSh"
     ];
   };
-
-  # wheel can sudo. Set a password after install with `passwd`, or keep
-  # key-only + passwordless sudo by uncommenting below.
-  # security.sudo.wheelNeedsPassword = false;
 
   # Root can also be reached with the same key (used by nixos-anywhere).
   users.users.root.openssh.authorizedKeys.keys = [

@@ -1,0 +1,16 @@
+# sops policy: every secret is encrypted to BOTH the admin (this Mac) and the
+# avocado host, so you can edit and the box can decrypt at boot.
+#
+# Recipients:
+#   admin   -> ~/.config/sops/age/keys.txt  (edit secrets from your Mac)
+#   avocado -> /var/lib/sops-nix/key.txt     (host decrypts at activation)
+keys:
+  - &admin age1lfwpymp7pwv0tcgyrvmtamz6stzcrkazvvmvmpkknfl59h88d5uq7p5j0k
+  - &avocado age1yhw9dwuqnjxlcuntvmd2ce2fnaenkfym2zvkj2caq4h6rscwys9qh0na3k
+
+creation_rules:
+  - path_regex: secrets/avocado\.yaml$
+    key_groups:
+      - age:
+          - *admin
+          - *avocado
