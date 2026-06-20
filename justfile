@@ -18,15 +18,15 @@ default:
 
 # Build + activate the config on the box (build runs on the remote).
 deploy:
-    nixos-rebuild switch --flake {{flake}} --target-host {{target}} --build-host {{target}}
+    TMPDIR=/tmp nixos-rebuild switch --flake {{flake}} --target-host {{target}} --build-host {{target}}
 
 # Stage the config for next boot without activating now (safe for risky changes).
 boot:
-    nixos-rebuild boot --flake {{flake}} --target-host {{target}} --build-host {{target}}
+    TMPDIR=/tmp nixos-rebuild boot --flake {{flake}} --target-host {{target}} --build-host {{target}}
 
 # Show what activating would change, without committing to it.
 dry:
-    nixos-rebuild dry-activate --flake {{flake}} --target-host {{target}} --build-host {{target}}
+    TMPDIR=/tmp nixos-rebuild dry-activate --flake {{flake}} --target-host {{target}} --build-host {{target}}
 
 # Roll the box back to its previous generation.
 rollback:
