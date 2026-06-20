@@ -1,19 +1,22 @@
 #
-# disko ZFS layout for avocado.
+# disko: single ZFS pool STRIPED across BOTH disks (full capacity, NO redundancy).
 #
-# TARGET DISK: sda = WD 120GB (currently empty on the Ubuntu box).
-# This is pinned by /dev/disk/by-id so disko never touches the wrong disk.
+#   sda = WD 120GB   -> ESP (/boot) + zfs partition
+#   sdb = Crucial 250GB -> whole-disk zfs partition
 #
-# To install on the 250GB Crucial (sdb) instead, swap `device` for:
-#   /dev/disk/by-id/ata-CT250MX500SSD4_1815E1366272
-# (that wipes the current Ubuntu install).
+# Both partitions join one striped vdev => ~342GB usable.
 #
-# WARNING: running disko/nixos-anywhere ERASES this disk completely.
+# !!! NO FAULT TOLERANCE !!!
+# If EITHER disk fails, the ENTIRE pool (including the OS) is lost.
+# Both disks are ERASED by disko/nixos-anywhere. Keep off-box backups.
+#
+# To add redundancy later you'd need to rebuild as a mirror (caps usable at
+# the smaller disk) or add disks for RAIDZ.
 #
 {
   disko.devices = {
     disk = {
-      main = {
+      sda = {
         type = "disk";
         device = "/dev/disk/by-id/ata-WDC_WDS120G2G0A-00JH30_182216805738";
         content = {
@@ -39,12 +42,31 @@
           };
         };
       };
+
+      sdb = {
+        type = "disk";
+        device = "/dev/disk/by-id/ata-CT250MX500SSD4_1815E1366272";
+        content = {
+          type = "gpt";
+          partitions = {
+            zfs = {
+              size = "100%";
+              content = {
+                type = "zfs";
+                pool = "rpool";
+              };
+            };
+          };
+        };
+      };
     };
 
     zpool = {
       rpool = {
         type = "zpool";
-        # Single-disk pool. (No mode = stripe/single vdev.)
+        # No `mode` => top-level vdevs are STRIPED (data spread across both,
+        # capacity summed, no redundancy).
+        mode = "";
         options = {
           ashift = "12";
           autotrim = "on";

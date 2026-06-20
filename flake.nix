@@ -2,7 +2,7 @@
   description = "NixOS configuration for avocado (ZFS, disko, deployed via nixos-anywhere)";
 
   inputs = {
-    nixpkgs.url = "github:nixos/nixpkgs/nixos-25.05";
+    nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
 
     disko = {
       url = "github:nix-community/disko";

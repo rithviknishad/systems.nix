@@ -7,7 +7,7 @@ installed onto an existing Ubuntu box with
 ## Layout
 
 ```
-flake.nix                     inputs: nixpkgs (25.05), disko, nixos-anywhere
+flake.nix                     inputs: nixpkgs (unstable), disko, nixos-anywhere
 hosts/avocado/
   default.nix                 host entry point (imports modules)
   hardware.nix                boot/kernel/ZFS hostId/microcode
@@ -20,11 +20,17 @@ modules/
 users/rithviknishad.nix       user + authorized SSH key
 ```
 
-## Disk target
+## Disk layout
 
-disko erases **sda** (`ata-WDC_WDS120G2G0A-00JH30_182216805738`, the empty 120GB WD).
-Ubuntu on sdb (250GB Crucial) is left untouched as a fallback. Change the disk in
-`hosts/avocado/disko.nix` if needed.
+Single ZFS pool **`rpool` striped across BOTH disks** for maximum capacity
+(~342 GB usable):
+
+- `sda` (120 GB WD) — ESP (`/boot`) + zfs partition
+- `sdb` (250 GB Crucial) — whole-disk zfs partition
+
+**No redundancy.** A stripe means losing *either* disk destroys the *entire*
+pool, including the OS. disko **erases both disks**. Keep off-box backups
+(`zfs send`) for anything important.
 
 ## Install (run from this directory)
 
@@ -55,6 +61,7 @@ nixos-rebuild switch \
 ## Post-install checklist
 
 - [ ] SSH back in as `rithviknishad`
-- [ ] Set UEFI boot order to the new disk (sda)
+- [ ] Set UEFI boot order to boot from the new pool's disk (sda ESP)
 - [ ] `sudo tailscale up` to re-join the tailnet
 - [ ] Re-create any Docker workloads (not yet ported)
+- [ ] Set up off-box `zfs send` backups (no on-disk redundancy)
