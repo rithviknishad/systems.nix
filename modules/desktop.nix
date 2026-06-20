@@ -12,6 +12,14 @@
   # Don't auto-suspend at the login screen — this box also runs services.
   services.displayManager.gdm.autoSuspend = false;
 
+  # Never auto-suspend or hibernate. Idle suspend is what dropped this box off
+  # the network; masking the sleep targets prevents anything (GNOME idle,
+  # logind idle, lid close, manual) from suspending it.
+  systemd.targets.sleep.enable = false;
+  systemd.targets.suspend.enable = false;
+  systemd.targets.hibernate.enable = false;
+  systemd.targets.hybrid-sleep.enable = false;
+
   services.xserver.xkb = {
     layout = "us";
     variant = "";

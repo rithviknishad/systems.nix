@@ -4,9 +4,10 @@
 
 host        := "avocado"
 flake       := ".#" + host
-target_ip   := "192.168.165.202"
-target      := "root@" + target_ip
-user_target := "rithviknishad@" + target_ip
+# Connect over Tailscale MagicDNS — stable across DHCP/IP changes.
+addr        := "avocado"
+target      := "root@" + addr
+user_target := "rithviknishad@" + addr
 secrets     := "secrets/avocado.yaml"
 ci_secrets  := "secrets/ci.yaml"
 
