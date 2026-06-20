@@ -18,7 +18,7 @@
 #   4. Commit & push; watch the run under the repo's "pipelines" tab.
 
 when:
-  - event: ["push"]
+  - event: ["push", "manual"]
     branch: ["main"]
 
 engine: "nixery"
