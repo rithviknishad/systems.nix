@@ -12,6 +12,7 @@
     ./apps/opencode
     ./apps/lens
     ./apps/zsh
+    ./apps/ssh
     ./apps/claude-code
   ];
 

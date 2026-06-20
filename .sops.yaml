@@ -16,6 +16,11 @@ creation_rules:
       - age:
           - *admin
           - *avocado
+  - path_regex: secrets/ssh_id_ed25519$
+    key_groups:
+      - age:
+          - *admin
+          - *avocado
 
   # CI secrets: admin edits from the Mac, the Tangled spindle decrypts.
   - path_regex: secrets/ci\.yaml$
