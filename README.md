@@ -50,23 +50,29 @@ this arm64 Mac.
 
 ## Secrets (sops-nix + age)
 
+Enter the dev shell first — it puts `sops`, `age`, `ssh-to-age`, `mkpasswd`,
+`nixos-anywhere`, and `nixfmt` on `PATH` and sets `SOPS_AGE_KEY_FILE`:
+
+```sh
+nix develop           # or: direnv allow  (auto-loads via .envrc)
+```
+
 Secrets are stored encrypted in `secrets/avocado.yaml`, keyed by age recipients
 in `.sops.yaml`:
 
 - **admin** key: `~/.config/sops/age/keys.txt` (this Mac) — edit secrets
 - **host** key: `avocado:/var/lib/sops-nix/key.txt` — decrypts at boot
 
-Edit secrets:
+Edit secrets (inside `nix develop`, so `SOPS_AGE_KEY_FILE` is already set):
 
 ```sh
-export SOPS_AGE_KEY_FILE=~/.config/sops/age/keys.txt
-nix shell nixpkgs#sops -c sops secrets/avocado.yaml
+sops secrets/avocado.yaml
 ```
 
 Generate a login/sudo password hash to paste in:
 
 ```sh
-nix shell nixpkgs#mkpasswd -c mkpasswd -m sha-512
+mkpasswd -m sha-512
 ```
 
 Wiring: `users/rithviknishad.nix` reads the hash via
