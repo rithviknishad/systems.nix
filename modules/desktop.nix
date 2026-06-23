@@ -25,9 +25,7 @@
     variant = "";
   };
 
-  # Keep our networkd-based DHCP; don't let GNOME pull in NetworkManager
-  # (avoids a backend switch that could disrupt the remote connection).
-  networking.networkmanager.enable = lib.mkForce false;
+  # Let GNOME pull in NetworkManager as the desktop backend.
 
   hardware.graphics.enable = true;
 
