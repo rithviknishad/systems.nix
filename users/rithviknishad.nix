@@ -15,6 +15,7 @@
     extraGroups = [
       "wheel"
       "networkmanager"
+      "dialout"
     ];
     shell = pkgs.zsh;
     # Password hash comes from sops (secrets/avocado.yaml). Enables console
