@@ -6,3 +6,6 @@ result-*
 # CI age private key (lives in a Tangled secret, never in git)
 ci-age-key.txt
 *.agekey
+
+# Immich DB secret with real passwords (use secret.example.yaml as template)
+k8s/immich/secret.yaml

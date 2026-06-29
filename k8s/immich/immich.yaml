@@ -1,0 +1,184 @@
+# Immich on k3s.
+#
+# Deploy:   kubectl apply -k k8s/immich
+# Watch:    kubectl -n immich get pods -w
+# Visit:    https://photos.rithviknishad.dev (after tunnel route + ingress)
+#
+# Storage uses k3s's local-path provisioner (on rpool/ZFS). The library PVC
+# is sized 200Gi — adjust to taste. Postgres holds metadata; photos live on
+# the library PVC.
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: immich
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: immich-library
+  namespace: immich
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 200Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: immich-db
+  namespace: immich
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 20Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  namespace: immich
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: postgres }
+  template:
+    metadata:
+      labels: { app: postgres }
+    spec:
+      containers:
+        - name: postgres
+          image: ghcr.io/immich-app/postgres:14-vectorchord0.4.3-pgvectors0.2.0
+          envFrom:
+            - secretRef: { name: immich-secret }
+          ports: [{ containerPort: 5432 }]
+          volumeMounts:
+            - name: db
+              mountPath: /var/lib/postgresql/data
+      volumes:
+        - name: db
+          persistentVolumeClaim: { claimName: immich-db }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: immich
+spec:
+  selector: { app: postgres }
+  ports: [{ port: 5432 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: immich
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: redis }
+  template:
+    metadata:
+      labels: { app: redis }
+    spec:
+      containers:
+        - name: redis
+          image: redis:7
+          ports: [{ containerPort: 6379 }]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: immich
+spec:
+  selector: { app: redis }
+  ports: [{ port: 6379 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: immich-server
+  namespace: immich
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: immich-server }
+  template:
+    metadata:
+      labels: { app: immich-server }
+    spec:
+      containers:
+        - name: server
+          image: ghcr.io/immich-app/immich-server:release
+          envFrom:
+            - secretRef: { name: immich-secret }
+          ports: [{ containerPort: 2283 }]
+          volumeMounts:
+            - name: library
+              mountPath: /usr/src/app/upload
+      volumes:
+        - name: library
+          persistentVolumeClaim: { claimName: immich-library }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: immich-server
+  namespace: immich
+spec:
+  selector: { app: immich-server }
+  ports: [{ port: 2283 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: immich-machine-learning
+  namespace: immich
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: immich-machine-learning }
+  template:
+    metadata:
+      labels: { app: immich-machine-learning }
+    spec:
+      containers:
+        - name: ml
+          image: ghcr.io/immich-app/immich-machine-learning:release
+          ports: [{ containerPort: 3003 }]
+          volumeMounts:
+            - name: cache
+              mountPath: /cache
+      volumes:
+        - name: cache
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: immich-machine-learning
+  namespace: immich
+spec:
+  selector: { app: immich-machine-learning }
+  ports: [{ port: 3003 }]
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: immich
+  namespace: immich
+spec:
+  rules:
+    - host: photos.rithviknishad.dev
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: immich-server
+                port:
+                  number: 2283
