@@ -99,3 +99,10 @@ logs *unit:
 install:
     nix run github:nix-community/nixos-anywhere -- \
         --flake {{flake}} --build-on remote -L {{target}}
+
+# Fetch the k3s kubeconfig to ~/.kube/avocado (server rewritten to avocado).
+# Use it: export KUBECONFIG=~/.kube/avocado  (or load it into Lens).
+kubeconfig:
+    ssh {{NIX_SSHOPTS}} {{target}} 'cat /etc/rancher/k3s/k3s.yaml' \
+        | sed 's/127.0.0.1/avocado/' > ~/.kube/avocado
+    @echo "wrote ~/.kube/avocado — try: KUBECONFIG=~/.kube/avocado kubectl get nodes"

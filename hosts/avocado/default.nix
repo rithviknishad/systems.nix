@@ -14,6 +14,7 @@
     ../../modules/desktop.nix
     ../../modules/home-manager.nix
     ../../modules/tailscale.nix
+    ../../modules/k3s.nix
     ../../users/rithviknishad.nix
   ];
 

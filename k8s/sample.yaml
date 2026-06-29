@@ -1,0 +1,58 @@
+# Sample workload to confirm the k3s cluster works end-to-end.
+#
+# Apply from the box (or your Mac once kubeconfig is set up):
+#   kubectl apply -f k8s/sample.yaml
+#
+# Then check:
+#   kubectl get pods,svc,ingress
+#   curl -H 'Host: hello.avocado.local' http://avocado/
+#
+# Remove with: kubectl delete -f k8s/sample.yaml
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hello
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: hello
+  template:
+    metadata:
+      labels:
+        app: hello
+    spec:
+      containers:
+        - name: hello
+          image: nginxdemos/hello:plain-text
+          ports:
+            - containerPort: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: hello
+spec:
+  selector:
+    app: hello
+  ports:
+    - port: 80
+      targetPort: 80
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: hello
+spec:
+  rules:
+    - host: hello.avocado.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: hello
+                port:
+                  number: 80
