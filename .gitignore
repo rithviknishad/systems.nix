@@ -9,3 +9,8 @@ ci-age-key.txt
 
 # Immich DB secret with real passwords (use secret.example.yaml as template)
 k8s/immich/secret.yaml
+
+# Legacy plaintext Grafana password file — superseded by the sops-encrypted
+# secrets/monitoring.enc.yaml (decrypted at deploy time by helm-secrets).
+# Kept ignored as a safety net so a stray copy can never be committed.
+k8s/monitoring/values-secret.yaml

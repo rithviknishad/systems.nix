@@ -1,0 +1,137 @@
+---
+# ntfy-alertmanager.yaml — bridge that turns VMAlertmanager webhooks into
+# ntfy.sh push notifications.
+#
+# ntfy has no native Alertmanager receiver, so we run xenrox/ntfy-alertmanager
+# (https://git.xenrox.net/~xenrox/ntfy-alertmanager) as the webhook target.
+# This is the avocado equivalent of the reference's jiralert receiver.
+#
+# VMAlertmanager (values.yaml) posts alerts to http://ntfy-alertmanager:8080;
+# the bridge formats them and publishes to the ntfy topic below.
+#
+# >>> CHANGE `topic` to a private, hard-to-guess topic and subscribe to it in
+#     the ntfy app (https://ntfy.sh/<topic>). Anyone who knows a public topic
+#     name can read it. For auth, add `access-token` (or user/password) under
+#     the `ntfy` block and move this ConfigMap to a Secret.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ntfy-alertmanager-config
+  namespace: monitoring
+data:
+  config: |
+    http-address :8080
+    log-level info
+    log-format json
+    # One notification per alert (recurrence-cached below).
+    alert-mode single
+
+    # Map alert severity -> ntfy priority + tags (emoji shortcodes).
+    labels {
+      order "severity"
+      severity "critical" {
+        priority 5
+        tags "rotating_light"
+      }
+      severity "warning" {
+        priority 4
+        tags "warning"
+      }
+      severity "info" {
+        priority 2
+        tags "information_source"
+      }
+    }
+
+    # Resolved alerts update the original notification instead of spamming.
+    resolved {
+      update-notification true
+      tags "white_check_mark"
+      priority 2
+    }
+
+    ntfy {
+      server https://ntfy.sh
+      topic avocado-alerts
+      markdown true
+    }
+
+    # Suppress duplicate notifications while an alert keeps firing.
+    cache {
+      type memory
+      duration 24h
+      cleanup-interval 1h
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ntfy-alertmanager
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: ntfy-alertmanager
+    app.kubernetes.io/component: alerting
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ntfy-alertmanager
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ntfy-alertmanager
+      annotations:
+        # Restart the pod when the config changes (checksum bumps on edit).
+        checksum/config: config-v1
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: ntfy-alertmanager
+          # Pinned to a released tag (multi-arch amd64/arm64).
+          image: codeberg.org/xenrox/ntfy-alertmanager:1.0.0
+          args:
+            - --config
+            - /etc/ntfy-alertmanager/config
+          ports:
+            - name: http
+              containerPort: 8080
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: "10m"
+              memory: "32Mi"
+            limits:
+              cpu: "100m"
+              memory: "128Mi"
+          volumeMounts:
+            - name: config
+              mountPath: /etc/ntfy-alertmanager
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: ntfy-alertmanager-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ntfy-alertmanager
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: ntfy-alertmanager
+spec:
+  selector:
+    app.kubernetes.io/name: ntfy-alertmanager
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http

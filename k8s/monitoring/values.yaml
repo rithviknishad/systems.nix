@@ -1,0 +1,383 @@
+# values.yaml — victoria-metrics-k8s-stack chart values for avocado.
+#
+# Adapted from tellmeY18/retire.nix (chart 0.78.0) for a single-node k3s host:
+#   - Storage: k3s built-in `local-path` (not OpenEBS zfs-localpv).
+#   - No node taints/affinity (single node).
+#   - Alertmanager routes to the ntfy-alertmanager bridge -> ntfy.sh.
+#   - Prometheus CRD converter DISABLED; native VM CRDs only.
+#   - k3s doesn't expose etcd/scheduler/controller-manager as separate
+#     scrape targets, so those are turned off.
+#
+# Secret values (Grafana admin password) live in values-secret.yaml.
+# See all keys: helm show values vm/victoria-metrics-k8s-stack --version 0.78.0
+
+nameOverride: "vmks"
+
+# ===========================================================================
+# VictoriaMetrics Operator
+# ===========================================================================
+victoria-metrics-operator:
+  enabled: true
+  operator:
+    # We use pure native VM CRDs — no Prometheus CRD conversion.
+    disable_prometheus_converter: true
+  crds:
+    plain: true
+    cleanup:
+      enabled: true
+      image:
+        pullPolicy: IfNotPresent
+  admissionWebhooks:
+    # Ignore so the stack installs in a single pass without racing the
+    # webhook server startup (this is also the chart default in 0.77+).
+    policy: Ignore
+  resources:
+    requests:
+      cpu: "50m"
+      memory: "64Mi"
+    limits:
+      cpu: "300m"
+      memory: "256Mi"
+  serviceMonitor:
+    enabled: true
+
+# ===========================================================================
+# VMSingle — time-series database
+# ===========================================================================
+vmsingle:
+  enabled: true
+  spec:
+    replicaCount: 1
+    # 15 days of local metrics — bump if the pool has room.
+    retentionPeriod: "15d"
+    port: "8428"
+    storage:
+      # k3s ships the local-path provisioner as the default StorageClass.
+      storageClassName: local-path
+      accessModes:
+        - ReadWriteOnce
+      resources:
+        requests:
+          storage: 10Gi
+    resources:
+      requests:
+        cpu: "200m"
+        memory: "512Mi"
+      limits:
+        cpu: "1000m"
+        memory: "2Gi"
+    extraArgs:
+      dedup.minScrapeInterval: "30s"
+
+# ===========================================================================
+# VMAgent — metrics scraper
+# ===========================================================================
+vmagent:
+  enabled: true
+  spec:
+    scrapeInterval: "30s"
+    port: "8429"
+    # Discover all VMServiceScrape/VMPodScrape/VMNodeScrape/VMRule objects in
+    # every namespace.
+    selectAllByDefault: true
+    extraArgs:
+      promscrape.streamParse: "true"
+    resources:
+      requests:
+        cpu: "25m"
+        memory: "128Mi"
+      limits:
+        cpu: "500m"
+        memory: "512Mi"
+
+# ===========================================================================
+# VMAlert — rule evaluation
+# ===========================================================================
+vmalert:
+  enabled: true
+  spec:
+    evaluationInterval: "30s"
+    port: "8080"
+    selectAllByDefault: true
+    extraArgs:
+      http.pathPrefix: /
+    resources:
+      requests:
+        cpu: "50m"
+        memory: "64Mi"
+      limits:
+        cpu: "300m"
+        memory: "256Mi"
+
+# ===========================================================================
+# VMAlertmanager — alert routing -> ntfy.sh (via the ntfy-alertmanager bridge)
+# ===========================================================================
+alertmanager:
+  enabled: true
+  spec:
+    replicaCount: 1
+    port: "9093"
+    selectAllByDefault: true
+    resources:
+      requests:
+        cpu: "50m"
+        memory: "64Mi"
+      limits:
+        cpu: "200m"
+        memory: "256Mi"
+
+  # All alerts are forwarded to the ntfy-alertmanager bridge Deployment (see
+  # ntfy-alertmanager.yaml), which pushes them to an ntfy.sh topic. The
+  # always-firing Watchdog and any severity="none"/"info" chatter are dropped.
+  config:
+    global:
+      resolve_timeout: "5m"
+    route:
+      receiver: "ntfy"
+      group_by:
+        - alertname
+        - instance
+      group_wait: "30s"
+      group_interval: "5m"
+      repeat_interval: "4h"
+      routes:
+        # Watchdog fires constantly by design (dead-man's-switch) — drop it.
+        - matchers:
+            - alertname = "Watchdog"
+          receiver: "blackhole"
+        - matchers:
+            - severity = "none"
+          receiver: "blackhole"
+    receivers:
+      - name: "blackhole"
+      - name: "ntfy"
+        webhook_configs:
+          - url: "http://ntfy-alertmanager.monitoring.svc:8080"
+            send_resolved: true
+
+# ===========================================================================
+# Disabled: VMAuth / VMCluster (single node uses VMSingle)
+# ===========================================================================
+vmauth:
+  enabled: false
+vmcluster:
+  enabled: false
+
+# ===========================================================================
+# Default alerting/recording rules — keep, minus components k3s hides.
+# ===========================================================================
+defaultRules:
+  create: true
+  rules: {}
+  groups:
+    etcd:
+      create: false
+    kubeScheduler:
+      create: false
+    kubernetesSystemControllerManager:
+      create: false
+    kubernetesSystemScheduler:
+      create: false
+
+# ===========================================================================
+# Default dashboards (node-exporter, k8s, VM). ZFS dashboard is added via the
+# kustomize layer (zfs-grafana-dashboard.yaml).
+# ===========================================================================
+defaultDashboards:
+  enabled: true
+
+# ===========================================================================
+# Grafana
+# ===========================================================================
+grafana:
+  enabled: true
+  # Stable service name so the Ingress backend is predictable.
+  fullnameOverride: grafana
+  replicas: 1
+  persistence:
+    enabled: false
+  adminUser: admin
+  # adminPassword: set in values-secret.yaml
+  # Grafana auto-installs these plugins at startup. The VictoriaLogs datasource
+  # plugin is required for victorialogs-datasource.yaml to load (it's signed by
+  # VictoriaMetrics, so no unsigned-plugin allowlist is needed).
+  plugins:
+    - victoriametrics-logs-datasource
+  sidecar:
+    dashboards:
+      enabled: true
+      searchNamespace: ALL
+      label: grafana_dashboard
+      labelValue: "1"
+      folderAnnotation: grafana_folder
+      provider:
+        foldersFromFilesStructure: true
+    datasources:
+      enabled: true
+      searchNamespace: ALL
+      label: grafana_datasource
+      labelValue: "1"
+  # ClusterIP — external access is via the Traefik Ingress (grafana-ingress.yaml).
+  service:
+    type: ClusterIP
+    port: 3000
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+  grafana.ini:
+    server:
+      root_url: "https://grafana.rithviknishad.dev"
+    analytics:
+      reporting_enabled: false
+      check_for_updates: false
+      check_for_plugin_updates: false
+    # --- Grafana SSO via Cloudflare Access (JWT) --------------------------
+    # Grafana is exposed at https://grafana.rithviknishad.dev through the
+    # cloudflared tunnel (modules/cloudflared.nix). To put Cloudflare Access
+    # SSO in front of it, create a Zero Trust "self-hosted" application for
+    # that hostname, then UNCOMMENT the block below and fill the two
+    # site-specific values, and redeploy (`just mon-deploy`):
+    #
+    #   1. jwk_set_url host -> your team domain, i.e.
+    #      https://<TEAM>.cloudflareaccess.com  (Zero Trust > Settings > Custom
+    #      Pages / team domain).
+    #   2. expect_claims `aud` -> the Access application's Audience (AUD) tag
+    #      (Access > Applications > your app > Overview).
+    #
+    # Access validates the login at the edge and injects a signed
+    # Cf-Access-Jwt-Assertion header; Grafana verifies it against Cloudflare's
+    # JWKS and auto-provisions the user. The built-in login form stays enabled
+    # as a break-glass fallback (don't set disable_login_form). See
+    # README.md "Grafana SSO via Cloudflare Access" for the full runbook.
+    #
+    auth.jwt:
+      enabled: true
+      header_name: Cf-Access-Jwt-Assertion
+      email_claim: email
+      username_claim: email
+      auto_sign_up: true
+      jwk_set_url: https://<TEAM>.cloudflareaccess.com/cdn-cgi/access/certs
+      # Pin the token to THIS Access app (strongly recommended):
+      expect_claims: '{"aud":"<ACCESS_APP_AUD>"}'
+    # # New SSO users land as Viewers by default; promote yourself once, or
+    # # uncomment to make every Access-admitted user a full Admin (safe only
+    # # because Access already gates who can reach Grafana at all):
+    # users:
+    #   auto_assign_org_role: Admin
+
+# ===========================================================================
+# node-exporter — host metrics (CPU, memory, disk, network, ZFS).
+# ===========================================================================
+prometheus-node-exporter:
+  enabled: true
+  resources:
+    requests:
+      cpu: "50m"
+      memory: "32Mi"
+    limits:
+      cpu: "200m"
+      memory: "128Mi"
+  extraArgs:
+    # The textfile dir is populated by the NixOS `zfs-textfile-metrics` timer
+    # (modules/monitoring.nix) — this is what surfaces node_zfs_zpool_state,
+    # which the ZFS pool-health alerts depend on.
+    - --collector.textfile.directory=/host/textfile
+    - --collector.filesystem.mount-points-exclude=^/(dev|proc|sys|var/lib/docker/.+|var/lib/kubelet/.+)($|/)
+    - --collector.filesystem.fs-types-exclude=^(autofs|binfmt_misc|bpf|cgroup2?|configfs|debugfs|devpts|devtmpfs|fusectl|hugetlbfs|iso9660|mqueue|nsfs|overlay|proc|procfs|pstore|rpc_pipefs|securityfs|selinuxfs|squashfs|erofs|sysfs|tracefs)$
+  extraHostVolumeMounts:
+    - name: textfile
+      hostPath: /var/lib/node-exporter/textfile
+      mountPath: /host/textfile
+      # DirectoryOrCreate guarantees the mount source exists at pod start even
+      # if node-exporter races ahead of the NixOS tmpfiles/timer (e.g. right
+      # after a reboot) — otherwise the mount goes stale and all textfile
+      # metrics silently disappear.
+      type: DirectoryOrCreate
+      readOnly: true
+  service:
+    labels:
+      jobLabel: node-exporter
+  vmScrape:
+    enabled: true
+    spec:
+      endpoints:
+        - relabelConfigs:
+            - sourceLabels: [__meta_kubernetes_pod_node_name]
+              targetLabel: node
+              action: replace
+          metricRelabelConfigs:
+            - action: drop
+              regex: /var/lib/kubelet/pods.+
+              source_labels:
+                - mountpoint
+          port: metrics
+      jobLabel: jobLabel
+
+# ===========================================================================
+# kube-state-metrics — Kubernetes object state.
+# ===========================================================================
+kube-state-metrics:
+  enabled: true
+  resources:
+    requests:
+      cpu: "50m"
+      memory: "64Mi"
+    limits:
+      cpu: "200m"
+      memory: "256Mi"
+  vmScrape:
+    enabled: true
+
+# ===========================================================================
+# Scrape targets that DO work on k3s.
+# ===========================================================================
+kubelet:
+  enabled: true
+  vmScrape:
+    kind: VMNodeScrape
+    spec:
+      interval: "30s"
+      scrapeTimeout: "10s"
+      scheme: https
+      bearerTokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
+      honorLabels: true
+      honorTimestamps: false
+      tlsConfig:
+        caFile: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+        insecureSkipVerify: true
+      relabelConfigs:
+        - action: labelmap
+          regex: __meta_kubernetes_node_label_(.+)
+        - sourceLabels:
+            - __metrics_path__
+          targetLabel: metrics_path
+        - replacement: kubelet
+          targetLabel: job
+      metricRelabelConfigs:
+        - action: labeldrop
+          regex: (uid)
+        - action: labeldrop
+          regex: (id|name)
+
+kubeApiServer:
+  enabled: true
+coreDns:
+  enabled: true
+
+# ===========================================================================
+# Scrape targets k3s does NOT expose as separate processes — disabled.
+# ===========================================================================
+kubeEtcd:
+  enabled: false
+kubeControllerManager:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeProxy:
+  enabled: false
+kubeDns:
+  enabled: false

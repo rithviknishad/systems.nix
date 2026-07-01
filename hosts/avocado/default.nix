@@ -15,6 +15,7 @@
     ../../modules/home-manager.nix
     ../../modules/tailscale.nix
     ../../modules/k3s.nix
+    ../../modules/monitoring.nix
     ../../modules/cloudflared.nix
     ../../users/rithviknishad.nix
   ];

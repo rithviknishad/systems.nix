@@ -1,0 +1,38 @@
+---
+# grafana-ingress.yaml — expose Grafana via k3s's bundled Traefik.
+#
+# The reference exposes Grafana with a Tailscale-operator LoadBalancer
+# Service. avocado doesn't run the Tailscale k8s operator (tailscale runs on
+# the host), so we use a Traefik Ingress instead — same pattern as
+# k8s/sample.yaml and k8s/immich.
+#
+# `grafana` is the Service name pinned via grafana.fullnameOverride in
+# values.yaml. Reach it on the tailnet at http://avocado with the Host header,
+# or wire grafana.rithviknishad.dev through the cloudflared tunnel.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: grafana
+  namespace: monitoring
+spec:
+  rules:
+    - host: grafana.avocado.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: grafana
+                port:
+                  number: 3000
+    - host: grafana.rithviknishad.dev
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: grafana
+                port:
+                  number: 3000

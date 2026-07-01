@@ -1,0 +1,25 @@
+---
+# victorialogs-datasource.yaml — register VictoriaLogs as a Grafana datasource.
+#
+# Grafana's datasource sidecar (enabled in values.yaml) picks up any ConfigMap
+# labelled `grafana_datasource: "1"` and provisions it. The plugin itself
+# (`victoriametrics-logs-datasource`) is installed via `grafana.plugins` in
+# values.yaml — without it this datasource type won't load.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: victorialogs-grafana-datasource
+  namespace: monitoring
+  labels:
+    grafana_datasource: "1"
+data:
+  victorialogs-datasource.yaml: |
+    apiVersion: 1
+    datasources:
+      - name: VictoriaLogs
+        type: victoriametrics-logs-datasource
+        access: proxy
+        url: http://victorialogs.monitoring.svc:9428
+        editable: true
+        jsonData:
+          maxLines: 1000

@@ -1,0 +1,73 @@
+---
+# smart-vmrules.yaml — VMRule for SMART disk-health alerts.
+#
+# Reads the smartmon_* metrics emitted by the NixOS `smart-textfile-metrics`
+# timer (modules/monitoring.nix) via node-exporter's textfile collector.
+#
+# avocado's rpool is a no-redundancy stripe, so a single failing disk means
+# data loss — SmartDeviceUnhealthy is a page-worthy, back-up-now signal.
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMRule
+metadata:
+  name: smart-disk-alerts
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: smartmon
+    app.kubernetes.io/component: alerting
+    app.kubernetes.io/part-of: victoria-metrics-k8s-stack
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  groups:
+    - name: smart-disk-health
+      rules:
+        - alert: SmartDeviceUnhealthy
+          expr: |-
+            smartmon_device_smart_healthy == 0
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: "SMART health FAILED on {{ $labels.disk }}"
+            description: >-
+              Disk {{ $labels.disk }} ({{ $labels.model }}, serial
+              {{ $labels.serial }}) on {{ $labels.instance }} reports a FAILED
+              SMART self-assessment. rpool has no redundancy — back up now and
+              plan a replacement. Inspect with `smartctl -a /dev/{{ $labels.disk }}`.
+
+        - alert: SmartDeviceHealthUnknown
+          expr: |-
+            smartmon_device_smart_healthy == -1
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "SMART health unknown for {{ $labels.disk }}"
+            description: >-
+              Could not read a SMART self-assessment for {{ $labels.disk }} on
+              {{ $labels.instance }}. The drive may not support SMART or smartctl
+              needs a different `-d` type.
+
+        - alert: SmartTextfileStale
+          expr: |-
+            time() - smartmon_smartctl_run > 1800
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "SMART metrics are stale for {{ $labels.disk }}"
+            description: >-
+              The smart-textfile-metrics timer on {{ $labels.instance }} hasn't
+              refreshed {{ $labels.disk }} in over 30 minutes. Check
+              `systemctl status smart-textfile-metrics.service`.
+
+        - alert: SmartDriveHot
+          expr: |-
+            smartmon_temperature_celsius > 60
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Drive {{ $labels.disk }} is running hot"
+            description: >-
+              {{ $labels.disk }} on {{ $labels.instance }} is at
+              {{ $value }}°C (>60°C for 10m). Check airflow.

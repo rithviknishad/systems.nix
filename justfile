@@ -103,6 +103,60 @@ install:
 # Fetch the k3s kubeconfig to ~/.kube/avocado (server rewritten to avocado).
 # Use it: export KUBECONFIG=~/.kube/avocado  (or load it into Lens).
 kubeconfig:
+    mkdir -p ~/.kube
     ssh {{NIX_SSHOPTS}} {{target}} 'cat /etc/rancher/k3s/k3s.yaml' \
         | sed 's/127.0.0.1/avocado/' > ~/.kube/avocado
     @echo "wrote ~/.kube/avocado — try: KUBECONFIG=~/.kube/avocado kubectl get nodes"
+
+# --- Monitoring stack (VictoriaMetrics + Grafana + ntfy) --------------------
+# All recipes below target the box via ~/.kube/avocado (run `just kubeconfig`
+# once first). See k8s/monitoring/README.md for the full walkthrough.
+
+kubeconfig_path := "~/.kube/avocado"
+
+# Deploy/upgrade the monitoring stack: namespace + helm release + CR layer.
+# The Grafana admin password is sops-decrypted from secrets/monitoring.enc.yaml
+# into the gitignored values-secret.yaml just before `helmfile sync`.
+mon-deploy:
+    sops --decrypt secrets/monitoring.enc.yaml > k8s/monitoring/values-secret.yaml
+    KUBECONFIG={{kubeconfig_path}} kubectl apply -f k8s/monitoring/namespace.yaml
+    KUBECONFIG={{kubeconfig_path}} helmfile sync --file k8s/monitoring/helmfile.yaml
+    KUBECONFIG={{kubeconfig_path}} kubectl apply -k k8s/monitoring
+
+# Show the state of the monitoring namespace (pods, services, rules).
+mon-status:
+    KUBECONFIG={{kubeconfig_path}} kubectl -n monitoring get pods,svc,ingress,vmrule
+
+# Port-forward Grafana to http://localhost:3000 (admin / monitoring.enc.yaml password).
+mon-grafana:
+    KUBECONFIG={{kubeconfig_path}} kubectl -n monitoring port-forward svc/grafana 3000:3000
+
+# Port-forward Gatus (uptime dashboard) to http://localhost:8080.
+mon-gatus:
+    KUBECONFIG={{kubeconfig_path}} kubectl -n monitoring port-forward svc/gatus 8080:8080
+
+# Port-forward VictoriaLogs UI/API to http://localhost:9428 (try /select/vmui).
+mon-logs:
+    KUBECONFIG={{kubeconfig_path}} kubectl -n monitoring port-forward svc/victorialogs 9428:9428
+
+# Tail the ntfy bridge logs (shows alerts as they're pushed).
+mon-ntfy-logs:
+    KUBECONFIG={{kubeconfig_path}} kubectl -n monitoring logs -f deploy/ntfy-alertmanager
+
+# Send a test push to an ntfy topic (default: avocado-alerts).
+mon-ntfy-test topic="avocado-alerts":
+    curl -H "Title: avocado monitoring test" -H "Tags: white_check_mark" \
+        -d "ntfy wiring works" "https://ntfy.sh/{{topic}}"
+
+# Remove the monitoring stack (CR layer + helm release). Keeps the namespace.
+mon-destroy:
+    -KUBECONFIG={{kubeconfig_path}} kubectl delete -k k8s/monitoring
+    KUBECONFIG={{kubeconfig_path}} helmfile destroy --file k8s/monitoring/helmfile.yaml
+
+# Edit the sops-encrypted monitoring secret (Grafana admin password, ntfy token).
+mon-secrets:
+    sops secrets/monitoring.enc.yaml
+
+# Re-encrypt the monitoring secret after changing recipients in .sops.yaml.
+mon-secrets-rekey:
+    sops updatekeys secrets/monitoring.enc.yaml

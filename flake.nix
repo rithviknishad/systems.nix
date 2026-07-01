@@ -82,6 +82,9 @@
               pkgs.nixfmt
               pkgs.git
               pkgs.cloudflared
+              pkgs.kubectl
+              pkgs.kubernetes-helm
+              pkgs.helmfile
               inputs.nixos-anywhere.packages.${system}.default
             ];
 
@@ -89,7 +92,7 @@
             # (Respects an already-set SOPS_AGE_KEY_FILE if you have one.)
             shellHook = ''
               export SOPS_AGE_KEY_FILE="''${SOPS_AGE_KEY_FILE:-$HOME/.config/sops/age/keys.txt}"
-              echo "avocado devshell ready — tools: sops age ssh-to-age mkpasswd nixos-anywhere nixfmt cloudflared"
+              echo "avocado devshell ready — tools: sops age ssh-to-age mkpasswd nixos-anywhere nixfmt cloudflared kubectl helm helmfile"
               echo "SOPS_AGE_KEY_FILE=$SOPS_AGE_KEY_FILE"
             '';
           };

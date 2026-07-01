@@ -1,0 +1,97 @@
+---
+# networkpolicies.yaml — default-deny ingress for the monitoring namespace,
+# plus the minimal allow-list needed to keep the stack working.
+#
+# k3s enforces NetworkPolicy (kube-router; flannel is NOT started with
+# --disable-network-policy), so these actually take effect. Only INGRESS is
+# restricted — egress is left open on purpose so VMAgent can keep scraping
+# targets across the whole cluster/host and pods can reach the internet
+# (ntfy.sh, Gatus's public checks) and DNS.
+#
+# Notes / gotchas baked in:
+#   - node-exporter runs with hostNetwork, so ingress policy doesn't apply to
+#     it — scraping it is unaffected.
+#   - the VM operator has a ValidatingWebhook the apiserver calls on :9443.
+#     The apiserver runs in the host netns, so its traffic isn't a
+#     "monitoring" or "kube-system" pod — it's allowed explicitly below, or
+#     every VMRule/VMServiceScrape apply would stall on the webhook.
+
+# 1) Default-deny all ingress to every pod in the namespace.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: monitoring
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+---
+# 2) Allow all ingress between pods within the monitoring namespace. This
+#    covers the bulk of the internal wiring: VMAgent -> scrape targets,
+#    Grafana -> VMSingle/VictoriaLogs/Alertmanager, VMAlert -> VMSingle,
+#    Alertmanager -> ntfy bridge, Gatus -> internal health, Vector ->
+#    VictoriaLogs, etc.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-intra-namespace
+  namespace: monitoring
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+---
+# 3) Allow the ingress controller (Traefik, in kube-system) to reach the two
+#    user-facing frontends. This is the only path external traffic (tunnel /
+#    tailnet via Traefik) takes into the namespace.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-controller-to-frontends
+  namespace: monitoring
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/name
+        operator: In
+        values:
+          - grafana
+          - gatus
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: TCP
+          port: 3000
+        - protocol: TCP
+          port: 8080
+---
+# 4) Allow the kube-apiserver to reach the operator's validating webhook. The
+#    apiserver is hostNetwork, so it can't be matched by a namespace/pod
+#    selector — allow :9443 from any source (only the operator pod is
+#    selected, and only its webhook port is opened).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-operator-webhook
+  namespace: monitoring
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: victoria-metrics-operator
+  policyTypes:
+    - Ingress
+  ingress:
+    - ports:
+        - protocol: TCP
+          port: 9443

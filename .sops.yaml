@@ -28,6 +28,15 @@ creation_rules:
           - *admin
           - *avocado
 
+  # Monitoring helm values secret (Grafana admin password, ntfy token). Decrypted
+  # at deploy time by helm-secrets on the admin machine; the box never reads it,
+  # but we still encrypt to avocado for consistency / future in-box deploys.
+  - path_regex: secrets/monitoring\.enc\.yaml$
+    key_groups:
+      - age:
+          - *admin
+          - *avocado
+
   # CI secrets: admin edits from the Mac, the Tangled spindle decrypts.
   - path_regex: secrets/ci\.yaml$
     key_groups:

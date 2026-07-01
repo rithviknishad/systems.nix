@@ -1,0 +1,177 @@
+---
+# vector.yaml — Vector DaemonSet that ships all pod logs to VictoriaLogs.
+#
+# Vector's `kubernetes_logs` source tails /var/log/pods (symlinks into the k3s
+# containerd log dir), enriches each line with pod/namespace/container metadata
+# from the API server, and forwards to VictoriaLogs via its Elasticsearch bulk
+# ingestion endpoint. This is the reference's `vector-log-collector.yaml`,
+# adapted for the k3s containerd path.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: vector
+  namespace: monitoring
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: vector
+rules:
+  - apiGroups: [""]
+    resources:
+      - namespaces
+      - nodes
+      - pods
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: vector
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: vector
+subjects:
+  - kind: ServiceAccount
+    name: vector
+    namespace: monitoring
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vector-config
+  namespace: monitoring
+data:
+  vector.yaml: |
+    data_dir: /vector-data-dir
+    api:
+      enabled: true
+      address: 127.0.0.1:8686
+
+    sources:
+      kubernetes_logs:
+        type: kubernetes_logs
+
+      # Vector's own internal metrics, scraped by VMAgent below.
+      internal_metrics:
+        type: internal_metrics
+
+    sinks:
+      # Ship logs to VictoriaLogs through its Elasticsearch bulk API. The VL-*
+      # headers tell VictoriaLogs which fields are stream labels, the message,
+      # and the timestamp.
+      victorialogs:
+        type: elasticsearch
+        inputs:
+          - kubernetes_logs
+        endpoints:
+          - http://victorialogs.monitoring.svc:9428/insert/elasticsearch
+        mode: bulk
+        api_version: v8
+        compression: gzip
+        healthcheck:
+          enabled: false
+        request:
+          headers:
+            VL-Time-Field: timestamp
+            VL-Msg-Field: message
+            VL-Stream-Fields: stream,kubernetes.pod_name,kubernetes.pod_namespace,kubernetes.container_name
+
+      prometheus:
+        type: prometheus_exporter
+        inputs:
+          - internal_metrics
+        address: 0.0.0.0:9090
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: vector
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: vector
+    app.kubernetes.io/component: logs
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: vector
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: vector
+      annotations:
+        checksum/config: config-v1
+    spec:
+      serviceAccountName: vector
+      containers:
+        - name: vector
+          image: timberio/vector:0.50.0-alpine
+          args:
+            - --config
+            - /etc/vector/vector.yaml
+          env:
+            - name: VECTOR_SELF_NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: VECTOR_SELF_POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: VECTOR_SELF_POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          ports:
+            - name: metrics
+              containerPort: 9090
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "256Mi"
+          volumeMounts:
+            - name: config
+              mountPath: /etc/vector
+              readOnly: true
+            - name: data-dir
+              mountPath: /vector-data-dir
+            - name: var-log
+              mountPath: /var/log
+              readOnly: true
+            # /var/log/pods entries are symlinks into the k3s containerd log
+            # dir; mount it so Vector can follow them.
+            - name: k3s-containerd
+              mountPath: /var/lib/rancher/k3s/agent/containerd
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: vector-config
+        - name: data-dir
+          hostPath:
+            path: /var/lib/vector
+            type: DirectoryOrCreate
+        - name: var-log
+          hostPath:
+            path: /var/log
+        - name: k3s-containerd
+          hostPath:
+            path: /var/lib/rancher/k3s/agent/containerd
+---
+# Scrape Vector's internal metrics.
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMPodScrape
+metadata:
+  name: vector
+  namespace: monitoring
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: vector
+  podMetricsEndpoints:
+    - port: metrics
+      interval: 30s

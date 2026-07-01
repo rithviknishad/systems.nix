@@ -1,0 +1,49 @@
+---
+# kustomization.yaml — native VM CRs + glue for the monitoring namespace.
+#
+# Apply AFTER the helm stack (which installs the VM Operator + CRDs):
+#   just mon-deploy    # runs helmfile sync, then `kubectl apply -k` this dir
+#
+# The helm chart (helmfile.yaml + values.yaml) owns VMSingle/VMAgent/VMAlert/
+# VMAlertmanager/Grafana/node-exporter/kube-state-metrics + the operator.
+# This layer adds the single-node avocado extras that the chart doesn't:
+#   - Namespace (PodSecurity labels) — also applied first by `just mon-deploy`.
+#   - Traefik Ingress for Grafana (replaces the reference's Tailscale LB).
+#   - ntfy-alertmanager bridge (replaces the reference's jiralert).
+#   - ZFS host alerts + dashboard (uses node_zfs_zpool_state from the NixOS
+#     textfile timer in modules/monitoring.nix).
+#   - PVC storage alerts and cAdvisor container scraping.
+#   - Gatus uptime probing -> ntfy (replaces the reference's Cloudprober).
+#   - VictoriaLogs + Vector log pipeline + a Grafana logs datasource.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: victoria-metrics-k8s-stack
+      app.kubernetes.io/managed-by: kustomize
+    includeSelectors: false
+
+resources:
+  - namespace.yaml
+  # Grafana access via Traefik ingress.
+  - grafana-ingress.yaml
+  # Alertmanager -> ntfy.sh bridge.
+  - ntfy-alertmanager.yaml
+  # ZFS host-level alerts (built-in collector + textfile pool state).
+  - zfs-vmrules.yaml
+  - zfs-grafana-dashboard.yaml
+  # SMART disk-health alerts (textfile collector).
+  - smart-vmrules.yaml
+  # Cluster-wide PVC storage alerts.
+  - pvc-storage-vmrules.yaml
+  # Per-container metrics from kubelet's embedded cAdvisor.
+  - cadvisor-vmnodescrape.yaml
+  # Uptime: synthetic probing of internal + public endpoints -> ntfy.
+  - gatus.yaml
+  # Logs: VictoriaLogs store + Vector collector + Grafana datasource.
+  - victorialogs.yaml
+  - vector.yaml
+  - victorialogs-datasource.yaml
+  # Hardening: default-deny ingress + minimal allow-list.
+  - networkpolicies.yaml

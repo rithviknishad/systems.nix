@@ -1,0 +1,121 @@
+---
+# victorialogs.yaml — VictoriaLogs single-node log database.
+#
+# Stores logs shipped by the Vector DaemonSet (vector.yaml) and is queried by
+# Grafana via the VictoriaLogs datasource (victorialogs-datasource.yaml). This
+# is the reference's `victorialogs-deployment.yaml`, adapted to persist on
+# k3s's local-path provisioner instead of an emptyDir.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: victorialogs-storage
+  namespace: monitoring
+spec:
+  storageClassName: local-path
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: victorialogs
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: victorialogs
+    app.kubernetes.io/component: logs
+spec:
+  replicas: 1
+  # local-path is RWO; never run two writers against the same volume.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: victorialogs
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: victorialogs
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        # local-path mounts are root-owned; fsGroup makes the volume writable
+        # for the non-root VictoriaLogs process.
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: victorialogs
+          image: victoriametrics/victoria-logs:v1.51.0
+          args:
+            - --storageDataPath=/vlogs
+            - --retentionPeriod=30d
+            - --httpListenAddr=:9428
+          ports:
+            - name: http
+              containerPort: 9428
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 15
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 30
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "1Gi"
+          volumeMounts:
+            - name: storage
+              mountPath: /vlogs
+      volumes:
+        - name: storage
+          persistentVolumeClaim:
+            claimName: victorialogs-storage
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: victorialogs
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: victorialogs
+spec:
+  selector:
+    app.kubernetes.io/name: victorialogs
+  ports:
+    - name: http
+      port: 9428
+      targetPort: http
+---
+# Scrape VictoriaLogs' own /metrics so Grafana/VMAlert can see its health.
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMServiceScrape
+metadata:
+  name: victorialogs
+  namespace: monitoring
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: victorialogs
+  endpoints:
+    - port: http
+      interval: 30s
+      path: /metrics

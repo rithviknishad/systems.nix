@@ -1,0 +1,20 @@
+---
+# namespace.yaml — the `monitoring` namespace for the VM stack.
+#
+# Declared as a standalone manifest (not via helmfile's createNamespace) so
+# the PodSecurity labels are in place before any workload pod schedules.
+#
+# `privileged` enforcement is required because prometheus-node-exporter runs
+# with hostNetwork/hostPID and hostPath mounts to read host-level metrics.
+# Everything else (VMSingle/VMAgent/VMAlert/VMAlertmanager/Grafana/KSM) runs
+# unprivileged; audit+warn at `baseline` surface anything that over-reaches.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: monitoring
+  labels:
+    pod-security.kubernetes.io/enforce: privileged
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/audit: baseline
+    pod-security.kubernetes.io/warn: baseline
+    app.kubernetes.io/part-of: victoria-metrics-k8s-stack

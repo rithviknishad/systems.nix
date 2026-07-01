@@ -28,6 +28,13 @@ in
         # Each public host -> Traefik. Add more lines as you add services.
         "hello.rithviknishad.dev" = "http://localhost:80";
         "photos.rithviknishad.dev" = "http://localhost:80";
+        # Monitoring stack (Traefik routes by Host to the k8s Ingresses):
+        #   grafana -> grafana-ingress.yaml, status (Gatus) -> gatus.yaml.
+        # Grafana is additionally protected by Cloudflare Access (Zero Trust);
+        # see k8s/monitoring/README.md "Grafana SSO". VMSingle/VictoriaLogs are
+        # deliberately NOT exposed here (no auth) — reach them via Tailscale.
+        "grafana.rithviknishad.dev" = "http://localhost:80";
+        "status.rithviknishad.dev" = "http://localhost:80";
       };
     };
   };

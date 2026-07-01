@@ -1,0 +1,52 @@
+---
+# helmfile.yaml — Helm release for the avocado monitoring stack.
+#
+# Mirrors tellmeY18/retire.nix's k8s monitoring, adapted for a single-node
+# k3s box (avocado): local-path storage instead of OpenEBS ZFS-LocalPV, no
+# node taints/affinity, and ntfy.sh alerting instead of jiralert.
+#
+# Deploy (from `nix develop`, with KUBECONFIG pointing at the box):
+#   just mon-deploy          # namespace + helm stack + kustomize layer
+#
+# Or manually:
+#   kubectl apply -f k8s/monitoring/namespace.yaml
+#   helmfile sync --file k8s/monitoring/helmfile.yaml
+#   kubectl apply -k k8s/monitoring
+#
+# The chart installs: VMSingle (TSDB), VMAgent (scraper), VMAlert (rules),
+# VMAlertmanager (routing), Grafana, node-exporter, kube-state-metrics, and
+# the VictoriaMetrics Operator + CRDs (VMRule/VMServiceScrape/VMNodeScrape).
+#
+# Version policy: pin chart versions explicitly; read the CHANGELOG on bumps.
+
+repositories:
+  - name: vm
+    url: https://victoriametrics.github.io/helm-charts
+
+helmDefaults:
+  wait: true
+  timeout: 600
+  # Roll back automatically on a failed upgrade (combined with wait: true this
+  # keeps the cluster in the last-known-good state rather than half-upgraded).
+  atomic: true
+  verify: false # upstream charts are unsigned
+
+releases:
+  # victoria-metrics-k8s-stack — the whole monitoring stack + VM Operator/CRDs.
+  #
+  # The `monitoring` namespace is created by kustomize (with PodSecurity
+  # labels) before helmfile runs, hence createNamespace: false. `just
+  # mon-deploy` applies namespace.yaml first.
+  - name: victoria-metrics-k8s-stack
+    namespace: monitoring
+    createNamespace: false
+    chart: vm/victoria-metrics-k8s-stack
+    version: "0.78.0"
+    values:
+      - values.yaml
+      # Grafana admin password. The real values live sops-encrypted in
+      # secrets/monitoring.enc.yaml; `just mon-deploy` decrypts them to this
+      # gitignored file right before `helmfile sync`. (helm-secrets isn't used
+      # directly because nixpkgs ships Helm 4, whose plugin command dispatch is
+      # incompatible with helm-secrets 4.7.x.)
+      - values-secret.yaml
