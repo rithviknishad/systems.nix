@@ -3,9 +3,9 @@ result-*
 .direnv/
 .pre-commit-config.yaml
 
-# CI age private key (lives in a Tangled secret, never in git)
-ci-age-key.txt
+# age private keys — never in git
 *.agekey
+*-age-key.txt
 
 # Immich DB secret with real passwords (use secret.example.yaml as template)
 k8s/immich/secret.yaml
@@ -14,3 +14,9 @@ k8s/immich/secret.yaml
 # secrets/monitoring.enc.yaml (decrypted at deploy time by helm-secrets).
 # Kept ignored as a safety net so a stray copy can never be committed.
 k8s/monitoring/values-secret.yaml
+
+# Jekyll build artifacts for the docs site (docs/).
+docs/_site/
+docs/.jekyll-cache/
+docs/.jekyll-metadata
+docs/vendor/

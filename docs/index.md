@@ -35,7 +35,7 @@ with **sops-nix**.
 | [NixOS & modules](nix-modules.md) | The flake, every `modules/*.nix`, host and user config |
 | [Home Manager](home-manager.md) | The desktop and per-app user environment |
 | [Storage: disko & ZFS](storage.md) | Disk partitioning, the `rpool` stripe, snapshots |
-| [Secrets: sops-nix](secrets.md) | Encryption model, keys, and the GitHub mirror pipeline |
+| [Secrets: sops-nix](secrets.md) | Encryption model, keys, and how the box decrypts them |
 | [Networking](networking.md) | Tailscale, Cloudflare Tunnel, firewall, ingress routing |
 | [Kubernetes (k3s)](kubernetes.md) | The cluster, Immich, and the sample workload |
 | [Monitoring](monitoring.md) | VictoriaMetrics, Grafana, alerts, logs, uptime |
@@ -63,7 +63,7 @@ k8s/
   monitoring/                 VictoriaMetrics stack (helmfile + kustomize)
 
 secrets/                      sops-encrypted secrets (see Secrets page)
-.tangled/workflows/           CI: mirror Tangled -> GitHub
+.github/workflows/            CI: build & deploy these docs to GitHub Pages
 ```
 
 ## Fast facts
@@ -79,7 +79,7 @@ secrets/                      sops-encrypted secrets (see Secrets page)
 | Private access | Tailscale (`avocado` MagicDNS) |
 | Public access | Cloudflare Tunnel → `*.rithviknishad.dev` |
 | Secrets | sops-nix + age |
-| Source of truth | Hosted on Tangled, mirrored to GitHub |
+| Source of truth | Hosted on GitHub |
 
 ---
 

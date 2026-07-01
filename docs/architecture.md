@@ -147,5 +147,5 @@ details on the [Secrets](secrets.md) page.
 - **Push-based public access.** Cloudflare Tunnel avoids the need for a static
   IP, port forwarding, or a public firewall hole.
 - **Secrets in-repo, encrypted.** sops-nix keeps the config fully declarative
-  without leaking plaintext — even the CI mirror token never appears in the
-  clear.
+  without leaking plaintext — the box decrypts at activation with a host key
+  that never lives in the repo.

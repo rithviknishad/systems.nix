@@ -1,0 +1,17 @@
+# Gems for building the docs/ site locally and in CI (GitHub Actions).
+#
+# Local preview:
+#   cd docs && bundle install && bundle exec jekyll serve
+#
+# CI builds this via .github/workflows/pages.yml.
+source "https://rubygems.org"
+
+gem "jekyll", "~> 4.3"
+gem "just-the-docs", "~> 0.10"
+
+group :jekyll_plugins do
+  gem "jekyll-relative-links"
+end
+
+# Windows / JRuby niceties (harmless elsewhere).
+gem "webrick", "~> 1.8"

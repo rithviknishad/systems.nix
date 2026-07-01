@@ -100,10 +100,8 @@ just generations
 | Recipe | Action |
 |---|---|
 | `just secrets` / `just secrets-show` / `just secrets-rekey` | edit / view / re-encrypt `secrets/avocado.yaml` |
-| `just secrets-ci*` | same for `secrets/ci.yaml` (mirror PAT) |
 | `just mon-secrets*` | same for `secrets/monitoring.enc.yaml` |
 | `just passwd` | generate a SHA-512 password hash |
-| `just ci-keygen` | generate a fresh CI age keypair |
 
 ### Monitoring
 
@@ -136,14 +134,27 @@ per-workload details.
 
 ## Publishing these docs to GitHub Pages
 
-This `docs/` folder is a self-contained Jekyll site (just-the-docs theme).
+This `docs/` folder is a self-contained Jekyll site using the **just-the-docs**
+theme (see `docs/Gemfile`). It's built and deployed by GitHub Actions
+(`.github/workflows/pages.yml`).
 
-1. Push the repo to GitHub (the [CI mirror](secrets.md#ci-mirror-tangled--github)
-   does this automatically from Tangled).
+1. Push the repo to GitHub (it's the primary now).
 2. In the GitHub repo: **Settings → Pages → Build and deployment**.
-3. Source: **Deploy from a branch**; Branch: **`main`**; Folder: **`/docs`**.
-4. Save. The site builds at `https://<user>.github.io/systems.nix/`.
+3. Source: **GitHub Actions**.
+4. Push any change under `docs/` (or run the workflow manually). The action
+   builds the site and publishes it at
+   `https://<user>.github.io/systems.nix/`.
 
-Mermaid diagrams render natively (configured in `docs/_config.yml`), and
-relative `.md` links resolve via GitHub Pages' built-in `jekyll-relative-links`
-plugin — no extra build step.
+Why Actions and not "deploy from a branch": the classic branch build only ships
+a small set of built-in themes, so a gem-based `theme: just-the-docs` needs a
+real Jekyll build. Mermaid diagrams render natively (configured in
+`docs/_config.yml`), and relative `.md` links resolve via the
+`jekyll-relative-links` plugin.
+
+Preview locally:
+
+```sh
+cd docs
+bundle install
+bundle exec jekyll serve   # http://localhost:4000
+```
