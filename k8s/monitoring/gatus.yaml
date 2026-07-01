@@ -79,6 +79,19 @@ data:
           - "[CERTIFICATE_EXPIRATION] > 240h"
         alerts:
           - type: ntfy
+
+      # Immich photos. Hits the app's own ping endpoint (not just the root /)
+      # so this reflects Immich being alive, not merely the Cloudflare edge.
+      - name: photos.rithviknishad.dev
+        group: public
+        url: "https://photos.rithviknishad.dev/api/server/ping"
+        interval: 5m
+        conditions:
+          - "[STATUS] == 200"
+          - "[BODY].res == pong"
+          - "[CERTIFICATE_EXPIRATION] > 240h"
+        alerts:
+          - type: ntfy
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -99,7 +112,7 @@ spec:
         app.kubernetes.io/name: gatus
       annotations:
         # Bump to roll the pod when the config changes.
-        checksum/config: config-v1
+        checksum/config: config-v2
     spec:
       securityContext:
         runAsNonRoot: true
