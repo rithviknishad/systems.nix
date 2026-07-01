@@ -1,6 +1,6 @@
 # GitHub Pages configuration for the systems.nix documentation site.
 #
-# Uses the just-the-docs remote theme (sidebar nav + search + native Mermaid).
+# Uses the just-the-docs (sidebar nav + search + native Mermaid).
 # GitHub Pages enables the jekyll-remote-theme and jekyll-relative-links
 # plugins by default, so relative ".md" links between pages Just Work.
 #
@@ -13,7 +13,7 @@ description: >-
   Home Manager, sops-nix, Tailscale, Cloudflare Tunnel, and a
   VictoriaMetrics monitoring stack.
 
-remote_theme: just-the-docs/just-the-docs
+theme: just-the-docs
 
 # Render ```mermaid fenced blocks as diagrams on the published site.
 mermaid:
@@ -26,7 +26,7 @@ heading_anchors: true
 color_scheme: dark
 
 aux_links:
-  "Repository (GitHub mirror)":
+  "Repository":
     - "https://github.com/rithviknishad/systems.nix"
 
 aux_links_new_tab: true
@@ -37,5 +37,4 @@ back_to_top: true
 back_to_top_text: "Back to top"
 
 plugins:
-  - jekyll-remote-theme
   - jekyll-relative-links
