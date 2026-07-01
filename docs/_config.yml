@@ -23,9 +23,6 @@ mermaid:
 # Show a "table of contents" heading list on each page.
 heading_anchors: true
 
-# Collapse long code blocks nicely.
-color_scheme: dark
-
 aux_links:
   "Repository":
     - "https://github.com/rithviknishad/systems.nix"
