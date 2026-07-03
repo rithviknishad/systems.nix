@@ -18,9 +18,10 @@ environment, the Kubernetes workloads, and the monitoring stack.
 
 `avocado` runs **NixOS (unstable)** on a **ZFS root** laid out by
 [disko](https://github.com/nix-community/disko) and installed remotely with
-[nixos-anywhere](https://github.com/nix-community/nixos-anywhere). A **GNOME**
-desktop and a per-user **Home Manager** profile turn it into a usable
-workstation. It also runs a single-node **k3s** cluster hosting real workloads
+[nixos-anywhere](https://github.com/nix-community/nixos-anywhere). Its screen
+is a **kiosk** — cage runs btop fullscreen at boot, always showing live system
+stats — while a per-user **Home Manager** profile configures the CLI
+environment. It also runs a single-node **k3s** cluster hosting real workloads
 (Immich photos) behind the bundled **Traefik** ingress. The box is reachable
 privately over **Tailscale** and publicly through a **Cloudflare Tunnel** (no
 open ports). A **VictoriaMetrics + Grafana + ntfy** stack watches the host,
@@ -74,7 +75,7 @@ secrets/                      sops-encrypted secrets (see Secrets page)
 | Hardware | Intel i7-8550U, UEFI, 2× SATA SSD |
 | OS | NixOS `nixos-unstable`, `stateVersion = 26.11` |
 | Root filesystem | ZFS pool `rpool` (striped, **no redundancy**) |
-| Desktop | GNOME on Wayland (GDM) |
+| Display | cage kiosk (Wayland) → btop system stats |
 | Orchestrator | k3s server, embedded etcd, Traefik ingress |
 | Private access | Tailscale (`avocado` MagicDNS) |
 | Public access | Cloudflare Tunnel → `*.rithviknishad.dev` |

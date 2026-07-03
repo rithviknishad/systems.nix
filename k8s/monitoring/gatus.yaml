@@ -39,6 +39,13 @@ data:
           failure-threshold: 3
           success-threshold: 2
           send-on-resolved: true
+        # Per-group topic overrides: the ABDM-SBX reachability checks are
+        # third-party gov endpoints, so their alerts go to a SEPARATE topic
+        # (subscribe separately at https://ntfy.sh/avocado-abdm).
+        overrides:
+          - group: "ABDM-SBX"
+            topic: "avocado-abdm"
+            priority: 4
 
     endpoints:
       # --- In-cluster services (component liveness) --------------------------
@@ -92,6 +99,39 @@ data:
           - "[CERTIFICATE_EXPIRATION] > 240h"
         alerts:
           - type: ntfy
+
+      # --- ABDM sandbox (third-party) — reachability only --------------------
+      # These are external ABDM sandbox endpoints we don't control; they return
+      # 404/401/etc on a bare GET, so we only assert the host is REACHABLE
+      # ([CONNECTED] == true covers DNS + TCP + TLS + a response arriving). No
+      # cert-expiry check (their renewals aren't our problem). Alerts route to
+      # the avocado-abdm ntfy topic via the group override above.
+      - name: abhasbx
+        group: ABDM-SBX
+        url: "https://abhasbx.abdm.gov.in/abha/api"
+        interval: 5m
+        conditions:
+          - "[CONNECTED] == true"
+        alerts:
+          - type: ntfy
+
+      - name: hiecm (dev)
+        group: ABDM-SBX
+        url: "https://dev.abdm.gov.in/api/hiecm"
+        interval: 5m
+        conditions:
+          - "[CONNECTED] == true"
+        alerts:
+          - type: ntfy
+
+      - name: facilitysbx
+        group: ABDM-SBX
+        url: "https://facilitysbx.abdm.gov.in"
+        interval: 5m
+        conditions:
+          - "[CONNECTED] == true"
+        alerts:
+          - type: ntfy
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -112,7 +152,7 @@ spec:
         app.kubernetes.io/name: gatus
       annotations:
         # Bump to roll the pod when the config changes.
-        checksum/config: config-v2
+        checksum/config: config-v3
     spec:
       securityContext:
         runAsNonRoot: true

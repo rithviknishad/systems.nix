@@ -29,7 +29,6 @@ It ships two ways (see [the flake](nix-modules.md#the-flake-flakenix)):
 | `zsh` | zsh + oh-my-zsh (`robbyrussell`), history, aliases, autosuggest, syntax highlight |
 | `ssh` | client config; identity file from the sops-delivered key |
 | `direnv` | `direnv` + `nix-direnv`, wired into zsh |
-| `gnome` | dconf tweaks to stop idle screen-blanking/power actions |
 | `opencode` | installs the `opencode` terminal AI agent |
 | `lens` | installs Lens (Kubernetes IDE, unfree) |
 | `claude-code` | installs Claude Code (unfree) |
@@ -65,13 +64,9 @@ A privacy-hardened Firefox adapted from
   keyword engines (`@np` Nix Packages, `@no` Nix Options, `@gh` GitHub, …).
 - **Locked preferences** (`prefs.nix`): the `user.js`-style profile settings.
 
-### GNOME idle (`gnome`)
-
-Complements the system-level sleep masking in
-[`desktop.nix`](nix-modules.md#desktopnix--gnome-workstation). System suspend is
-already blocked; this module disables the *per-user* GNOME behaviours that
-remain — screen blanking on idle, idle dimming, and idle power actions — so the
-session (and the services it hosts) stays awake indefinitely.
+> There used to be a `gnome` module here (dconf tweaks to stop idle
+> screen-blanking/locking). It was removed along with the GNOME desktop when
+> the display became a [cage + btop kiosk](nix-modules.md#kiosknix--stats-display-cage--btop).
 
 ## Adding an app
 

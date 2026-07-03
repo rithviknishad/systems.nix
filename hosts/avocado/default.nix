@@ -11,7 +11,7 @@
     ../../modules/nh.nix
     ../../modules/sops.nix
     ../../modules/zfs.nix
-    ../../modules/desktop.nix
+    ../../modules/kiosk.nix
     ../../modules/home-manager.nix
     ../../modules/tailscale.nix
     ../../modules/k3s.nix
@@ -22,8 +22,8 @@
 
   networking.hostName = "avocado";
 
-  # Use NetworkManager (pulled in by the desktop module) for DHCP on all
-  # interfaces, with a GUI widget in the GNOME shell.
+  # NetworkManager for DHCP on all interfaces (was pulled in by the old GNOME
+  # desktop; now enabled explicitly — `nmcli`/`nmtui` over SSH).
   networking.networkmanager.enable = true;
 
   # The NixOS release this config was authored against. Do not change

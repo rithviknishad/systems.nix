@@ -14,7 +14,6 @@
     ./apps/zsh
     ./apps/ssh
     ./apps/claude-code
-    ./apps/gnome
     ./apps/direnv
   ];
 

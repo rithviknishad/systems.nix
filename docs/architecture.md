@@ -18,7 +18,7 @@ flowchart TB
     subgraph HW[Physical box: avocado - Intel i7-8550U, UEFI]
         subgraph OS[NixOS - built from this flake]
             base[Base system: nix, gc, firewall]
-            desk[GNOME desktop + Home Manager]
+            desk[Stats kiosk: cage + btop, plus Home Manager]
             net[Tailscale + Cloudflare Tunnel]
             k3s[k3s server - single node]
             mon[Host metrics timers: ZFS + SMART]
@@ -139,8 +139,9 @@ details on the [Secrets](secrets.md) page.
   (~342 GB) from two mismatched disks. The tradeoff: any single disk failure
   destroys the whole pool including the OS. Off-box `zfs send` backups are the
   safety net.
-- **Desktop + server on one box.** The machine never sleeps (sleep targets are
-  masked and GNOME idle actions disabled) so services stay reachable.
+- **Kiosk + server on one box.** The machine never sleeps (sleep targets are
+  masked) and the screen never locks or blanks — it permanently shows btop —
+  so services stay reachable and the display doubles as a status panel.
 - **k3s with bundled add-ons on.** Traefik, ServiceLB, and local-path are left
   enabled for an easy first workload rather than swapping in heavier
   alternatives.

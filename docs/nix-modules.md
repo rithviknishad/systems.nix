@@ -52,7 +52,7 @@ module file.
 imports = [
   ./hardware.nix ./disko.nix
   ../../modules/base.nix ../../modules/ssh.nix ../../modules/nh.nix
-  ../../modules/sops.nix ../../modules/zfs.nix ../../modules/desktop.nix
+  ../../modules/sops.nix ../../modules/zfs.nix ../../modules/kiosk.nix
   ../../modules/home-manager.nix ../../modules/tailscale.nix
   ../../modules/k3s.nix ../../modules/monitoring.nix
   ../../modules/cloudflared.nix ../../users/rithviknishad.nix
@@ -126,16 +126,22 @@ secrets needed early at activation: the user's `hashed-password`
 > snapshots are taken today**. To start snapshotting `/home`, set that property
 > on the `home` dataset. Scrub and trim run regardless.
 
-### `desktop.nix` — GNOME workstation
+### `kiosk.nix` — stats display (cage + btop)
 
-- GNOME on **Wayland** via **GDM**; PipeWire audio (ALSA + Pulse shims),
-  `rtkit` for realtime scheduling.
+- The built-in screen is a **kiosk**: [cage](https://github.com/cage-kiosk/cage)
+  (a single-application Wayland compositor) starts at boot on tty1 and runs
+  **btop** fullscreen inside a `foot` terminal. No desktop, no login screen,
+  no screensaver — nothing to lock or idle. (This replaced the earlier GNOME
+  desktop module.)
+- The session runs as a dedicated **`kiosk` user** with no password, no SSH
+  keys, and no sudo; the console exposes only btop. Admin access stays SSH
+  (key-only). VT switching is left enabled (`-s`) so a getty on tty2 remains
+  reachable with physical access if the network dies.
 - **Never sleeps:** the `sleep`, `suspend`, `hibernate`, and `hybrid-sleep`
-  systemd targets are masked, and GDM auto-suspend is off — critical because
-  idle suspend once dropped the box off the network. GNOME's per-user idle
-  actions are additionally disabled in [Home Manager](home-manager.md).
-- Trims unwanted GNOME apps (`gnome-tour`, `epiphany`, `geary`), adds
-  `gnome-tweaks`, and installs Noto/DejaVu fonts.
+  systemd targets are masked — critical because idle suspend once dropped the
+  box off the network.
+- Enables graphics (Intel UHD 620), installs DejaVu for foot, and adds `btop`
+  + foot's terminfo system-wide.
 
 ### `home-manager.nix` — Home Manager as a NixOS module
 
