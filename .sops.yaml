@@ -34,3 +34,12 @@ creation_rules:
       - age:
           - *admin
           - *avocado
+
+  # ESPHome secrets.yaml (WiFi creds, API keys). Decrypted at deploy time on
+  # the admin machine into a k8s Secret (`just esphome-deploy`); encrypted to
+  # avocado too for consistency / future in-box deploys.
+  - path_regex: secrets/esphome\.enc\.yaml$
+    key_groups:
+      - age:
+          - *admin
+          - *avocado

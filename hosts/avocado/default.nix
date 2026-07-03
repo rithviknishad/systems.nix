@@ -17,6 +17,7 @@
     ../../modules/k3s.nix
     ../../modules/monitoring.nix
     ../../modules/cloudflared.nix
+    ../../modules/esphome.nix
     ../../users/rithviknishad.nix
   ];
 

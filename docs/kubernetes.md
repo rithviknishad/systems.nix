@@ -101,6 +101,12 @@ kubectl -n immich get pods -w
 The example secret wires `postgres` and `immich-server` together
 (`DB_HOSTNAME=postgres`, `REDIS_HOSTNAME=redis`, matching DB user/name).
 
+### ESPHome (ESP32 firmware dashboard) — `k8s/esphome/`
+
+Runs with **`hostNetwork: true`** so mDNS discovery and OTA updates reach the
+LAN — the exception to the usual ClusterIP pattern. Deployed via
+`just esphome-deploy`; documented on its own [ESPHome](esphome.md) page.
+
 ## The monitoring workload
 
 The largest thing on the cluster is the observability stack under

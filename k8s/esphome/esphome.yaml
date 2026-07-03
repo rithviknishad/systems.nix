@@ -1,0 +1,105 @@
+# ESPHome dashboard on k3s.
+#
+# Deploy:   just esphome-deploy   (manifests + sops-decrypted secrets.yaml)
+# Watch:    kubectl -n esphome get pods -w
+# Visit:    http://avocado:6052 (Tailscale) or https://esphome.rithviknishad.dev
+#           (Cloudflare Tunnel — MUST be gated by Cloudflare Access: the
+#           dashboard has NO auth of its own and can flash devices).
+#
+# hostNetwork is deliberate: the dashboard discovers ESP devices and tracks
+# their online status via mDNS multicast, and pushes OTA updates straight to
+# device IPs on the LAN. Neither works from behind the CNI. The tradeoff is
+# the pod binds :6052 on the host — the NixOS firewall keeps that closed on
+# LAN (Tailscale is a trusted interface, so tailnet access still works).
+# Inbound mDNS (5353/udp) is opened in modules/esphome.nix.
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: esphome
+---
+# Device YAMLs + build state live here (local-path -> rpool/ZFS). Compile
+# toolchains are baked into the image (/piolibs), so 5Gi is plenty.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: esphome-config
+  namespace: esphome
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: esphome
+  namespace: esphome
+spec:
+  replicas: 1
+  # Recreate: hostNetwork port 6052 + RWO PVC can't coexist across a rolling
+  # update on a single node.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels: { app: esphome }
+  template:
+    metadata:
+      labels: { app: esphome }
+    spec:
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      containers:
+        - name: esphome
+          image: ghcr.io/esphome/esphome:stable
+          ports: [{ containerPort: 6052 }]
+          # If mDNS ever proves flaky (e.g. devices on another VLAN), flip
+          # online-status tracking to ICMP ping instead:
+          # env:
+          #   - name: ESPHOME_DASHBOARD_USE_PING
+          #     value: "true"
+          volumeMounts:
+            - name: config
+              mountPath: /config
+            # secrets.yaml is mounted read-only from the sops-managed Secret —
+            # the repo is the source of truth, not the dashboard's editor.
+            # Edit via `just esphome-secrets`, roll out via `just esphome-deploy`.
+            - name: secrets
+              mountPath: /config/secrets.yaml
+              subPath: secrets.yaml
+      volumes:
+        - name: config
+          persistentVolumeClaim: { claimName: esphome-config }
+        - name: secrets
+          secret: { secretName: esphome-secrets }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: esphome
+  namespace: esphome
+spec:
+  selector: { app: esphome }
+  ports: [{ port: 6052 }]
+---
+# Public path: cloudflared -> Traefik :80 -> this Ingress. Do NOT create the
+# tunnel DNS route for this host until the Cloudflare Access application
+# exists — see docs/esphome.md.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: esphome
+  namespace: esphome
+spec:
+  rules:
+    - host: esphome.rithviknishad.dev
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: esphome
+                port:
+                  number: 6052

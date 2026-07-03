@@ -35,6 +35,12 @@ in
         # deliberately NOT exposed here (no auth) — reach them via Tailscale.
         "grafana.rithviknishad.dev" = "http://localhost:80";
         "status.rithviknishad.dev" = "http://localhost:80";
+        # ESPHome dashboard (k8s/esphome) — has NO auth of its own, so this
+        # host must be gated by Cloudflare Access. Create the Access app
+        # BEFORE running `cloudflared tunnel route dns avocado
+        # esphome.rithviknishad.dev`, or the dashboard (which can flash
+        # firmware onto devices) is wide open. See docs/esphome.md.
+        "esphome.rithviknishad.dev" = "http://localhost:80";
       };
     };
   };

@@ -64,6 +64,7 @@ flowchart LR
             immich[immich-server]
             grafana[grafana]
             gatus[gatus]
+            esphome[esphome]
         end
     end
 
@@ -73,6 +74,7 @@ flowchart LR
     traefik -->|photos.rithviknishad.dev| immich
     traefik -->|grafana.rithviknishad.dev| grafana
     traefik -->|status.rithviknishad.dev| gatus
+    traefik -->|esphome.rithviknishad.dev| esphome
 ```
 
 ### Public routing table
@@ -87,6 +89,7 @@ matched returns `http_status:404`.
 | `photos.rithviknishad.dev` | Immich `immich-server` | [Kubernetes](kubernetes.md) |
 | `grafana.rithviknishad.dev` | `grafana` | [Monitoring](monitoring.md) |
 | `status.rithviknishad.dev` | Gatus `gatus` | [Monitoring](monitoring.md) |
+| `esphome.rithviknishad.dev` | ESPHome `esphome` | [ESPHome](esphome.md) |
 
 Notes:
 
@@ -94,6 +97,8 @@ Notes:
 - Grafana can additionally sit behind **Cloudflare Access** (Zero-Trust SSO);
   the JWT wiring is templated and documented on the
   [Monitoring](monitoring.md#grafana-sso-cloudflare-access) page.
+- ESPHome **requires** Cloudflare Access (the dashboard has no auth) — create
+  the Access app *before* the DNS route; see [ESPHome](esphome.md).
 - The metrics/logs databases (VMSingle, VictoriaLogs) are **deliberately not**
   exposed through the tunnel — reach them over Tailscale.
 

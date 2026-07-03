@@ -55,7 +55,8 @@ imports = [
   ../../modules/sops.nix ../../modules/zfs.nix ../../modules/kiosk.nix
   ../../modules/home-manager.nix ../../modules/tailscale.nix
   ../../modules/k3s.nix ../../modules/monitoring.nix
-  ../../modules/cloudflared.nix ../../users/rithviknishad.nix
+  ../../modules/cloudflared.nix ../../modules/esphome.nix
+  ../../users/rithviknishad.nix
 ];
 ```
 
@@ -168,9 +169,16 @@ the [Kubernetes](kubernetes.md) page.
 ### `cloudflared.nix` — Cloudflare Tunnel
 
 Runs a named tunnel that maps public subdomains of `rithviknishad.dev`
-(`hello`, `photos`, `grafana`, `status`) to `http://localhost:80` (Traefik),
-with a default `http_status:404`. Credentials come from a sops binary secret.
-See [Networking](networking.md).
+(`hello`, `photos`, `grafana`, `status`, `esphome`) to `http://localhost:80`
+(Traefik), with a default `http_status:404`. Credentials come from a sops
+binary secret. See [Networking](networking.md).
+
+### `esphome.nix` — host-side ESPHome networking
+
+The ESPHome dashboard runs in k3s with `hostNetwork` ([ESPHome](esphome.md));
+this module just opens inbound UDP `5353` so mDNS responses from ESP devices
+on the LAN reach it. The dashboard port (6052) is deliberately **not** opened
+— the UI has no auth; it's reached via Tailscale or Cloudflare Access.
 
 ### `monitoring.nix` — host-side metrics glue
 

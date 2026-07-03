@@ -141,3 +141,34 @@ mon-secrets:
 # Re-encrypt the monitoring secret after changing recipients in .sops.yaml.
 mon-secrets-rekey:
     sops updatekeys secrets/monitoring.enc.yaml
+
+# --- ESPHome (dashboard for ESP32/ESP8266 firmware) --------------------------
+# Runs in k3s with hostNetwork (mDNS/OTA need the LAN). Dashboard:
+#   http://avocado:6052 (Tailscale) or https://esphome.rithviknishad.dev
+#   (Cloudflare Tunnel + Access). See docs/esphome.md.
+
+# Deploy/upgrade ESPHome: manifests + secrets.yaml from sops (no temp file),
+# then restart so the (subPath-mounted, non-live-updating) secret is picked up.
+esphome-deploy:
+    KUBECONFIG={{kubeconfig_path}} kubectl apply -k k8s/esphome
+    sops --decrypt secrets/esphome.enc.yaml \
+        | KUBECONFIG={{kubeconfig_path}} kubectl -n esphome create secret generic esphome-secrets \
+            --from-file=secrets.yaml=/dev/stdin --dry-run=client -o yaml \
+        | KUBECONFIG={{kubeconfig_path}} kubectl apply -f -
+    KUBECONFIG={{kubeconfig_path}} kubectl -n esphome rollout restart deploy/esphome
+
+# Show the state of the esphome namespace.
+esphome-status:
+    KUBECONFIG={{kubeconfig_path}} kubectl -n esphome get pods,svc,ingress,pvc
+
+# Tail the ESPHome dashboard logs.
+esphome-logs:
+    KUBECONFIG={{kubeconfig_path}} kubectl -n esphome logs -f deploy/esphome
+
+# Edit the sops-encrypted ESPHome secrets (WiFi creds etc.). Redeploy after.
+esphome-secrets:
+    sops secrets/esphome.enc.yaml
+
+# Re-encrypt the ESPHome secret after changing recipients in .sops.yaml.
+esphome-secrets-rekey:
+    sops updatekeys secrets/esphome.enc.yaml
