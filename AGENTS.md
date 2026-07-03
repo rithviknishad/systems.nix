@@ -51,6 +51,30 @@ almost entirely through AI agents — follow these rules strictly.
 - Typical loop: edit → `nix fmt` → `just eval` → commit → (user deploys, or
   deploy on request with confirmation).
 
+## New service checklist
+
+When adding (or removing) any service — k8s workload, NixOS service module,
+or anything exposed via ingress/tunnel — walk this list and ask the user
+about any item you skip:
+
+1. **Monitoring (Gatus).** Every user-facing or long-running service should
+   get an uptime probe in `k8s/monitoring/gatus.yaml`. Prefer a real health
+   endpoint (e.g. Immich's `/api/server/ping`) over `/`, pick the right
+   group (`internal` for in-cluster svc URLs, `public` for edge URLs), and
+   add `[CERTIFICATE_EXPIRATION]` checks for public HTTPS endpoints.
+   Gotcha: bump the `checksum/config` annotation in the gatus Deployment or
+   the pod won't pick up the new ConfigMap.
+2. **Alerts/metrics.** If the service exports metrics or has failure modes
+   worth paging on, consider a VMRule/scrape config alongside the existing
+   ones in `k8s/monitoring/`.
+3. **Ingress/exposure.** Local (`*.avocado.local`), Tailscale, or public via
+   cloudflared — be deliberate; public exposure needs user confirmation.
+4. **Secrets** via sops (see below), never inline.
+5. **Docs** — golden rule #1; usually `docs/kubernetes.md` or a new page.
+6. Removing a service? Remove its Gatus endpoint, alerts, ingress, secrets,
+   and docs too — dead probes cause alert noise, which erodes trust in the
+   ntfy topic.
+
 ## Validation (before any commit)
 
 1. `nix fmt` — formatting is nixfmt, enforced via the flake formatter.
