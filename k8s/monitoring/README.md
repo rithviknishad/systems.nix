@@ -114,16 +114,26 @@ strong, or don't create the DNS route until Access is live.
 
 ## ntfy notifications
 
-VMAlertmanager forwards every alert (except the always-firing `Watchdog`) to
-the `ntfy-alertmanager` bridge, which pushes to an [ntfy.sh](https://ntfy.sh)
-topic.
+Two independent pipelines push to [ntfy.sh](https://ntfy.sh):
 
-1. **Pick a private topic.** Edit `ntfy-alertmanager.yaml` → `topic:` (default
-   `avocado-alerts`). Anyone who knows a public topic name can read it, so use
-   something unguessable.
-2. **Subscribe** in the ntfy app / `https://ntfy.sh/<your-topic>`.
-3. Severity → priority/emoji mapping: `critical` → urgent 🚨, `warning` →
-   high ⚠️, resolved → ✅ (updates the original notification).
+- **VMAlertmanager** forwards every metrics-based alert (except the
+  always-firing `Watchdog`) to the `ntfy-alertmanager` bridge.
+- **Gatus** pushes uptime failures/recoveries via its native ntfy provider.
+
+Topics in use (all currently **public** — anyone who knows the name can read):
+
+| Topic | Fed by |
+|---|---|
+| `avocado-alerts` | Alertmanager bridge + Gatus `internal`/`public` groups |
+| `avocado-abdm` | Gatus `ABDM-SBX`/`ABDM-LIVE` groups only |
+
+1. **Pick unguessable topic names.** The Alertmanager topic lives in
+   `ntfy-alertmanager.yaml` → `topic:`; the Gatus topics live in `gatus.yaml`
+   (`alerting.ntfy.topic` and the per-group `overrides`).
+2. **Subscribe** in the ntfy app / `https://ntfy.sh/<topic>` (subscribe to both
+   to see everything).
+3. Severity → priority/emoji mapping (Alertmanager): `critical` → urgent 🚨,
+   `warning` → high ⚠️, resolved → ✅ (updates the original notification).
 4. Test the path end-to-end:
 
    ```sh
@@ -135,22 +145,41 @@ For a **private/authenticated** topic, put the ntfy `access-token` (or
 `user`/`password`) into the sops-encrypted `secrets/monitoring.enc.yaml`
 alongside the Grafana password — that file is the intended home for monitoring
 secrets. Wire it into a k8s Secret referenced by the `ntfy { }` block (and
-Gatus's provider) instead of the plaintext ConfigMap. Today the topic is public
-(no token), so there's nothing to encrypt yet.
+Gatus's provider) instead of the plaintext ConfigMap. Today the topics are
+public (no token), so there's nothing to encrypt yet.
 
 The bridge image is pinned to `codeberg.org/xenrox/ntfy-alertmanager:1.0.0`
 (multi-arch). Bump it as new releases land.
 
 ## Uptime (Gatus)
 
-`gatus.yaml` runs [Gatus](https://github.com/TwiN/gatus), which probes internal
-services (Grafana/VMSingle/VictoriaLogs health) and public endpoints
-(`rithviknishad.dev`, incl. TLS-expiry check) and pushes failures/recoveries
-straight to ntfy.sh via its **native ntfy provider** — a separate pipeline from
-the metrics-based Alertmanager alerts, on the same topic. Reach the dashboard
-publicly at <https://status.rithviknishad.dev> (live through the tunnel), on the
-tailnet via `curl -H "Host: status.rithviknishad.dev" http://avocado`, or
-`just mon-gatus`.
+`gatus.yaml` runs [Gatus](https://github.com/TwiN/gatus), which synthetically
+probes a set of endpoints and pushes failures/recoveries straight to ntfy.sh via
+its **native ntfy provider** — a separate pipeline from the metrics-based
+Alertmanager alerts. The dashboard sorts by group (`ui.default-sort-by: group`)
+into four blocks:
+
+| Group | Endpoints | "Up" means | ntfy topic |
+|---|---|---|---|
+| `internal` | Grafana / VMSingle / VictoriaLogs `/health` | `[STATUS] == 200` | `avocado-alerts` |
+| `public` | `rithviknishad.dev`, `photos.rithviknishad.dev` (Immich `/api/server/ping`) | 200 + body + TLS-expiry | `avocado-alerts` |
+| `ABDM-SBX` | ABDM **sandbox**: NHPR / ABHA / HIECM | reachable + non-5xx | `avocado-abdm` (prio 4) |
+| `ABDM-LIVE` | ABDM **live**: NHPR / ABHA / HIECM | reachable + non-5xx | `avocado-abdm` (prio 5) |
+
+The ABDM endpoints are third-party APIs we don't own, so their checks assert
+only `[CONNECTED] == true` **and** `[STATUS] < 500` — i.e. the host is reachable
+and not throwing a server error (2xx/3xx/4xx incl. auth-required all count as
+serving). They route to a **separate** `avocado-abdm` topic via ntfy `overrides`
+(live at priority 5/urgent, sandbox at 4/high) so third-party noise stays off the
+main topic. NHPR probes the `/v4/` path (the bare host 503s); ABHA/HIECM probe
+their real API paths.
+
+Reach the dashboard publicly at <https://status.rithviknishad.dev> (live through
+the tunnel), on the tailnet via `curl -H "Host: status.rithviknishad.dev"
+http://avocado`, or `just mon-gatus`. To add/edit checks, edit the `gatus-config`
+ConfigMap in `gatus.yaml`, bump its `checksum/config` annotation, and
+`kubectl apply -f k8s/monitoring/gatus.yaml` (Gatus is config-driven — there is
+no admin UI).
 
 ## Logs (VictoriaLogs + Vector)
 

@@ -41,7 +41,7 @@ flowchart TB
         gatus[Gatus - uptime]
     end
 
-    bridge --> ntfy[ntfy.sh topic]
+    bridge --> ntfy[ntfy.sh topics]
     gatus --> ntfy
     grafana --> user[You]
 ```
@@ -148,26 +148,43 @@ Vector's and VictoriaLogs' own metrics are scraped back into VMSingle.
 
 ## Uptime (Gatus)
 
-`gatus.yaml` runs [Gatus](https://github.com/TwiN/gatus), which probes internal
-service health (Grafana, VMSingle, VictoriaLogs) and public endpoints
-(`https://rithviknishad.dev`, including a **TLS-expiry** check) and pushes
-failures/recoveries straight to ntfy.sh via its **native ntfy provider** — a
-separate pipeline from the metrics-based alerts, on the same topic. Dashboard at
-`https://status.rithviknishad.dev` or `just mon-gatus`.
+`gatus.yaml` runs [Gatus](https://github.com/TwiN/gatus), which synthetically
+probes endpoints and pushes failures/recoveries to ntfy.sh via its **native ntfy
+provider** — a separate pipeline from the metrics-based alerts. There's no admin
+UI; checks are declared in the `gatus-config` ConfigMap. The dashboard sorts by
+group (`ui.default-sort-by: group`):
+
+| Group | Endpoints | "Up" means | ntfy topic |
+|---|---|---|---|
+| `internal` | Grafana / VMSingle / VictoriaLogs `/health` | `[STATUS] == 200` | `avocado-alerts` |
+| `public` | `rithviknishad.dev`, `photos.rithviknishad.dev` (Immich `/api/server/ping`) | 200 + body + TLS-expiry | `avocado-alerts` |
+| `ABDM-SBX` | ABDM **sandbox**: NHPR (`/v4/`) / ABHA / HIECM | reachable + non-5xx | `avocado-abdm` (prio 4) |
+| `ABDM-LIVE` | ABDM **live**: NHPR (`/v4/`) / ABHA / HIECM | reachable + non-5xx | `avocado-abdm` (prio 5) |
+
+The ABDM entries are third-party APIs we don't own, so their checks assert only
+`[CONNECTED] == true` **and** `[STATUS] < 500` (reachable and not server-erroring;
+2xx/3xx/4xx incl. auth-required all count as serving) and route to a **separate**
+`avocado-abdm` topic via ntfy `overrides`. Dashboard at
+`https://status.rithviknishad.dev`, on the tailnet via
+`curl -H "Host: status.rithviknishad.dev" http://avocado`, or `just mon-gatus`.
 
 ## Notifications (ntfy.sh)
 
-Two independent pipelines converge on one ntfy topic (default
-`avocado-alerts`):
+Two independent pipelines push to ntfy across two topics:
 
 - **Metrics alerts:** VMAlert → VMAlertmanager → `ntfy-alertmanager` bridge →
   ntfy. Severity maps to priority/emoji (critical 🚨, warning ⚠️, resolved ✅).
 - **Uptime:** Gatus → ntfy directly.
 
-> Pick a **private, hard-to-guess topic** (public topic names are readable by
-> anyone) and change it in both `ntfy-alertmanager.yaml` and `gatus.yaml`. For
-> an authenticated topic, put the token in `secrets/monitoring.enc.yaml` and
-> reference it from a Secret.
+| Topic | Fed by |
+|---|---|
+| `avocado-alerts` | Alertmanager bridge + Gatus `internal`/`public` groups |
+| `avocado-abdm` | Gatus `ABDM-SBX`/`ABDM-LIVE` groups (third-party, kept separate) |
+
+> Topic names are set in `ntfy-alertmanager.yaml` and `gatus.yaml` (top-level
+> `topic` + per-group `overrides`). Pick **hard-to-guess** names — public topic
+> names are readable by anyone. For an authenticated topic, put the token in
+> `secrets/monitoring.enc.yaml` and reference it from a Secret.
 
 ## Network policies
 
