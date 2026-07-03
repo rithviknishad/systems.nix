@@ -28,7 +28,10 @@ Key decisions:
 - **`hostNetwork: true`** — the dashboard needs mDNS multicast (device
   discovery + online status) and direct LAN reachability (OTA uploads, log
   streaming). Neither works from behind the CNI. `modules/esphome.nix` opens
-  inbound `5353/udp` for the mDNS responses.
+  inbound `5353/udp` for the mDNS responses, plus `6052/tcp` on the **`cni0`
+  bridge only** — hostNetwork means in-cluster clients (the Traefik ingress
+  hop, Gatus's uptime probe) hit the host firewall's INPUT chain rather than
+  pod-to-pod networking.
 - **Port 6052 stays closed on the LAN.** The dashboard has **no built-in
   auth**, and it can flash firmware — treat it like root on your IoT fleet.
   Access paths are Tailscale (trusted interface) and the Cloudflare Tunnel
@@ -85,6 +88,16 @@ in over USB, from **your Mac's browser** (the server needs no USB access):
    image from the dashboard's ⋮ → *Install* → *Manual download*).
 3. The device joins WiFi; from then on the dashboard sees it via mDNS and all
    updates are OTA — no more cables.
+
+## Monitoring
+
+Gatus probes the dashboard every minute via the in-cluster Service
+(`http://esphome.esphome.svc:6052/`, `internal` group in
+`k8s/monitoring/gatus.yaml`) and pushes failures to the `avocado-alerts` ntfy
+topic. The probe deliberately avoids the public URL — Cloudflare Access would
+answer with a login redirect and mask a dead backend. Device-level health
+(individual ESP32s dropping off) is not monitored today; the dashboard's own
+mDNS status view covers that interactively.
 
 ## Gotchas
 

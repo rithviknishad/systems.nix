@@ -156,7 +156,7 @@ group (`ui.default-sort-by: group`):
 
 | Group | Endpoints | "Up" means | ntfy topic |
 |---|---|---|---|
-| `internal` | Grafana / VMSingle / VictoriaLogs `/health` | `[STATUS] == 200` | `avocado-alerts` |
+| `internal` | Grafana / VMSingle / VictoriaLogs `/health`, ESPHome `/` | `[STATUS] == 200` | `avocado-alerts` |
 | `public` | `rithviknishad.dev`, `photos.rithviknishad.dev` (Immich `/api/server/ping`) | 200 + body + TLS-expiry | `avocado-alerts` |
 | `ABDM-SBX` | ABDM **sandbox**: NHPR (`/v4/`) / ABHA / HIECM | reachable + non-5xx | `avocado-abdm` (prio 4) |
 | `ABDM-LIVE` | ABDM **live**: NHPR (`/v4/`) / ABHA / HIECM | reachable + non-5xx | `avocado-abdm` (prio 5) |

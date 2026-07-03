@@ -13,4 +13,12 @@
   networking.firewall.allowedUDPPorts = [
     5353 # mDNS — ESPHome device discovery / online status
   ];
+
+  # The dashboard binds :6052 in the HOST netns (hostNetwork), so traffic from
+  # CNI pods (Traefik ingress hop, Gatus uptime probe) arrives on the cni0
+  # bridge and hits the INPUT chain. Allow it there only — the LAN-facing
+  # interface stays closed (the UI has no auth).
+  networking.firewall.interfaces."cni0".allowedTCPPorts = [
+    6052 # ESPHome dashboard — in-cluster access only
+  ];
 }

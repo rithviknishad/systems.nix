@@ -176,9 +176,11 @@ binary secret. See [Networking](networking.md).
 ### `esphome.nix` — host-side ESPHome networking
 
 The ESPHome dashboard runs in k3s with `hostNetwork` ([ESPHome](esphome.md));
-this module just opens inbound UDP `5353` so mDNS responses from ESP devices
-on the LAN reach it. The dashboard port (6052) is deliberately **not** opened
-— the UI has no auth; it's reached via Tailscale or Cloudflare Access.
+this module opens inbound UDP `5353` so mDNS responses from ESP devices on the
+LAN reach it, and TCP `6052` on the **`cni0` bridge only** so in-cluster
+clients (Traefik ingress, Gatus probe) can reach the host-bound dashboard
+port. 6052 is deliberately **not** opened on the LAN — the UI has no auth;
+it's reached via Tailscale or Cloudflare Access.
 
 ### `monitoring.nix` — host-side metrics glue
 

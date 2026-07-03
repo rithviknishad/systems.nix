@@ -85,6 +85,19 @@ data:
         alerts:
           - type: ntfy
 
+      # ESPHome dashboard (hostNetwork pod — see k8s/esphome). No /health
+      # endpoint; a 200 on / means the dashboard is alive. Probed via the
+      # in-cluster Service, NOT the public URL, so Cloudflare Access (which
+      # would answer with a login redirect) isn't in the measured path.
+      - name: esphome
+        group: internal
+        url: "http://esphome.esphome.svc:6052/"
+        interval: 1m
+        conditions:
+          - "[STATUS] == 200"
+        alerts:
+          - type: ntfy
+
       # --- Public endpoints (reachability + TLS expiry) ----------------------
       - name: rithviknishad.dev
         group: public
@@ -197,7 +210,7 @@ spec:
         app.kubernetes.io/name: gatus
       annotations:
         # Bump to roll the pod when the config changes.
-        checksum/config: config-v5
+        checksum/config: config-v6
     spec:
       securityContext:
         runAsNonRoot: true
