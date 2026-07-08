@@ -25,16 +25,14 @@ almost entirely through AI agents — follow these rules strictly.
    `docs/`, and `README.md` / `justfile` comments if affected. New
    functionality → add docs; removed functionality → remove docs. A change
    without its doc update is an incomplete change.
-2. **Commit every atomic change once it's verified working.** Commits are
-   the rollback mechanism here. One logical change per commit; never bundle
-   unrelated edits. Verify first (see "Validation"), then commit. Match the
-   existing style: short, lowercase, imperative (e.g. `setup kiosk`,
-   `add zfs snapshot alerts`).
-3. **Never commit plaintext secrets.** Secrets go through sops
+2. **Keep changes atomic and self-contained.** One logical change at a time;
+   never bundle unrelated edits. Verify each change works (see "Validation")
+   before moving on, so it stays easy to review and undo.
+3. **Never expose plaintext secrets.** Secrets go through sops
    (`secrets/*.yaml`, edited via `just secrets` / `just mon-secrets`).
    Never print decrypted secret values into the chat, logs, or files.
-   Never touch age private keys. Check `git status` for stray secret files
-   before every commit.
+   Never touch age private keys. Never write decrypted secrets into the repo
+   tree — the decrypted files are gitignored; keep it that way.
 4. **Ask before destructive or live-impacting actions.** Never run without
    explicit confirmation: `just install` / nixos-anywhere (wipes both
    disks), `just deploy` (activates on the live box), disko changes,
@@ -48,8 +46,8 @@ almost entirely through AI agents — follow these rules strictly.
   tools (sops, nixfmt, kubectl, helmfile, ...) live there.
 - Prefer `just` recipes over raw commands. If a new operation becomes
   routine, add a recipe to `justfile` (with a comment) and document it.
-- Typical loop: edit → `nix fmt` → `just eval` → commit → (user deploys, or
-  deploy on request with confirmation).
+- Typical loop: edit → `nix fmt` → `just eval` → (user deploys, or deploy on
+  request with confirmation).
 
 ## New service checklist
 
@@ -75,7 +73,7 @@ about any item you skip:
    and docs too — dead probes cause alert noise, which erodes trust in the
    ntfy topic.
 
-## Validation (before any commit)
+## Validation (before finishing a change)
 
 1. `nix fmt` — formatting is nixfmt, enforced via the flake formatter.
 2. `just eval` — evaluates the full system config locally (fast, no build).
@@ -123,7 +121,6 @@ about any item you skip:
 
 ## Things agents must NOT do
 
-- Push to remotes unless explicitly asked.
 - Reboot the box, modify ZFS pools/datasets, or change UEFI/boot behavior
   without confirmation.
 - Disable or weaken: SSH key-only auth, the firewall, sops encryption,

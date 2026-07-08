@@ -12,9 +12,9 @@ tells you how to actually carry out maintenance work safely.
 
 ## Prime directives (read first)
 
-- `AGENTS.md` governs. Especially: docs stay in sync, commit atomic verified
-  changes, never commit plaintext secrets, and **ask before destructive or
-  live-impacting actions**.
+- `AGENTS.md` governs. Especially: docs stay in sync, keep changes atomic and
+  self-contained, never expose plaintext secrets, and **ask before
+  destructive or live-impacting actions**.
 - The repo is the source of truth. Never reshape declarative config to match
   drifted state on the box. Fix the config, then deploy.
 - Work inside the devshell (`nix develop` / direnv). All tools live there.
@@ -34,8 +34,9 @@ For any config edit (NixOS module, Home Manager app, hardware, disko):
 5. `just deploy` **only with explicit confirmation** — it activates on the
    live box.
 6. Update the relevant `docs/` page(s) (+ `README.md`/`justfile` if affected).
-7. Commit the atomic change (short, lowercase, imperative). Check
-   `git status` for stray secrets first.
+
+Keep each change atomic and self-contained so it's easy to review and undo.
+Leave version control to the user.
 
 `just rollback` reverts the box to its previous generation;
 `just generations` lists them. Rollback is a live action — confirm first.
@@ -60,7 +61,7 @@ Run `just kubeconfig` once, then use `KUBECONFIG=~/.kube/avocado`.
 **Update flake inputs.** `just update [input]` bumps `flake.lock` — this is a
 confirm-first action (AGENTS.md). After: `nix fmt`, `just eval`, then
 `just boot` or `just dry` before a full deploy so a bad bump can't brick the
-live activation. Commit `flake.lock` on its own.
+live activation. Keep the `flake.lock` bump as its own atomic change.
 
 **Add / remove a service.** Walk the "New service checklist" in `AGENTS.md`
 (Gatus probe, alerts, exposure, secrets, docs, symmetric removal). Deploy per
@@ -72,9 +73,9 @@ ingress, secrets, and docs — dead probes create alert noise.
 `just mon-secrets` (monitoring). Wire into NixOS through
 `config.sops.secrets."<name>".path` — never interpolate secret values into the
 Nix store or manifests. After changing recipients in `.sops.yaml`, run the
-matching `*-rekey` recipe. Never print decrypted values into chat/logs/files;
-check `git status` for stray decrypted files (`values-secret.yaml`,
-`k8s/immich/secret.yaml`) before committing.
+matching `*-rekey` recipe. Never print decrypted values into chat/logs/files,
+and never leave stray decrypted files in the tree (`values-secret.yaml`,
+`k8s/immich/secret.yaml` are gitignored — keep it that way).
 
 **Respond to an alert.** Find the source (Gatus endpoint or VMRule) → confirm
 it's a real failure via Grafana/logs, not a flapping probe → fix root cause in
@@ -97,6 +98,6 @@ Present the plan and wait for an explicit go-ahead.
 
 - `nix fmt` clean, `just eval` (and k8s render, if touched) passing.
 - Docs updated in the same change.
-- Atomic commit made, working tree clean of secrets.
+- Atomic, self-contained change; working tree clean of secrets.
 - If deployed: the box activated cleanly and the relevant Gatus/Grafana signal
   is healthy.
