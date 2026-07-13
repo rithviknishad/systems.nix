@@ -172,3 +172,35 @@ esphome-secrets:
 # Re-encrypt the ESPHome secret after changing recipients in .sops.yaml.
 esphome-secrets-rekey:
     sops updatekeys secrets/esphome.enc.yaml
+
+# --- Formance Ledger (standalone) --------------------------------------------
+# Path A of the roadmap: Ledger + worker + Caddy gateway + Console UI + a
+# dedicated Postgres, all in the `formance` namespace (k8s/formance). Console:
+#   https://ledger.rithviknishad.dev  (Cloudflare Tunnel + Access)
+#   http://avocado (Host: ledger.avocado.local) over Tailscale.
+# See docs/formance.md.
+
+# Deploy/upgrade Formance: manifests via kustomize, then the sops-encrypted
+# k8s Secret piped straight into kubectl (plaintext never touches disk).
+formance-deploy:
+    KUBECONFIG={{kubeconfig_path}} kubectl apply -k k8s/formance
+    sops --decrypt secrets/formance.enc.yaml \
+        | KUBECONFIG={{kubeconfig_path}} kubectl apply -f -
+
+# Show the state of the formance namespace.
+formance-status:
+    KUBECONFIG={{kubeconfig_path}} kubectl -n formance get pods,svc,ingress,pvc
+
+# Tail the ledger API server logs (use worker/gateway/console for the others).
+formance-logs component="ledger":
+    KUBECONFIG={{kubeconfig_path}} kubectl -n formance logs -f deploy/{{component}}
+
+# Edit the sops-encrypted Formance secret (DB password, POSTGRES_URI,
+# COOKIE_SECRET). After changing it, `rollout restart` the consumers to pick
+# it up (env-from-secret pods don't auto-reload), then formance-deploy.
+formance-secrets:
+    sops secrets/formance.enc.yaml
+
+# Re-encrypt the Formance secret after changing recipients in .sops.yaml.
+formance-secrets-rekey:
+    sops updatekeys secrets/formance.enc.yaml

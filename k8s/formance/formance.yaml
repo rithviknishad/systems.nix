@@ -1,0 +1,329 @@
+# Formance Ledger (standalone) on k3s.
+#
+# Deploy:   just formance-deploy      (applies these manifests + the sops secret)
+# Watch:    kubectl -n formance get pods -w
+# Visit:    https://ledger.rithviknishad.dev   (Console UI, behind Cloudflare Access)
+#
+# This is the "standalone" topology from formancehq/ledger's
+# examples/standalone/docker-compose.yml, translated to k8s — Path A in the
+# roadmap (Ledger only, no operator/Kafka/NATS). Components:
+#
+#   postgres   — dedicated PG 16, single source of truth (PVC on ZFS stripe)
+#   ledger     — the API server (`serve`), listens :3068
+#   worker     — async processing (`worker`), same image, no HTTP port
+#   gateway    — Caddy reverse proxy: /api/ledger/* -> ledger:3068 (+ CORS)
+#   console    — console-v3 web UI; its Next.js BFF proxies to gateway:8080
+#                server-side, so only the console is exposed publicly.
+#
+# Secrets (DB password, POSTGRES_URI, COOKIE_SECRET) come from the k8s Secret
+# `formance-secret`, applied from sops by `just formance-deploy` — NOT committed
+# here. See k8s/formance/secret.example.yaml and docs/formance.md.
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: formance
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: formance-db
+  namespace: formance
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 20Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  namespace: formance
+spec:
+  replicas: 1
+  strategy: { type: Recreate } # single RWO PVC — never two writers at once
+  selector:
+    matchLabels: { app: postgres }
+  template:
+    metadata:
+      labels: { app: postgres }
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          # max_connections bumped for the server+worker connection pools
+          # (POSTGRES_MAX_OPEN_CONNS=40 each). PGDATA lives under the mount.
+          args: ["-c", "max_connections=200"]
+          env:
+            - name: POSTGRES_USER
+              value: ledger
+            - name: POSTGRES_DB
+              value: ledger
+            - name: PGDATA
+              value: /data/postgres
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: formance-secret, key: POSTGRES_PASSWORD }
+          ports: [{ containerPort: 5432 }]
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "ledger"]
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          volumeMounts:
+            - name: db
+              mountPath: /data/postgres
+      volumes:
+        - name: db
+          persistentVolumeClaim: { claimName: formance-db }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: formance
+spec:
+  selector: { app: postgres }
+  ports: [{ port: 5432 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ledger
+  namespace: formance
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: ledger }
+  template:
+    metadata:
+      labels: { app: ledger }
+    spec:
+      containers:
+        - name: ledger
+          image: ghcr.io/formancehq/ledger:v2.4.0
+          args: ["serve"] # the HTTP API server (listens :3068)
+          env:
+            - name: DEBUG
+              value: "false"
+            - name: POSTGRES_URI
+              valueFrom:
+                secretKeyRef: { name: formance-secret, key: POSTGRES_URI }
+            - name: POSTGRES_MAX_OPEN_CONNS
+              value: "40"
+            - name: POSTGRES_MAX_IDLE_CONNS
+              value: "40"
+            - name: POSTGRES_CONN_MAX_IDLE_TIME
+              value: "5m"
+            # `serve` runs schema migrations on start (single-writer homelab).
+            - name: AUTO_UPGRADE
+              value: "true"
+            - name: EXPERIMENTAL_FEATURES
+              value: "true"
+            - name: BULK_PARALLEL
+              value: "10"
+            - name: EXPERIMENTAL_NUMSCRIPT_INTERPRETER
+              value: "true"
+            - name: EXPERIMENTAL_NUMSCRIPT_INTERPRETER_FLAGS
+              value: "experimental-overdraft-function experimental-get-asset-function experimental-get-amount-function experimental-oneof experimental-account-interpolation experimental-mid-script-function-call experimental-asset-colors"
+          ports: [{ containerPort: 3068 }]
+          readinessProbe:
+            httpGet: { path: /_healthcheck, port: 3068 }
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          livenessProbe:
+            httpGet: { path: /_healthcheck, port: 3068 }
+            initialDelaySeconds: 30
+            periodSeconds: 30
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ledger
+  namespace: formance
+spec:
+  selector: { app: ledger }
+  ports: [{ port: 3068 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker
+  namespace: formance
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: worker }
+  template:
+    metadata:
+      labels: { app: worker }
+    spec:
+      containers:
+        - name: worker
+          image: ghcr.io/formancehq/ledger:v2.4.0
+          args: ["worker"] # async processing; no HTTP port exposed
+          env:
+            - name: DEBUG
+              value: "false"
+            - name: POSTGRES_URI
+              valueFrom:
+                secretKeyRef: { name: formance-secret, key: POSTGRES_URI }
+            - name: POSTGRES_MAX_OPEN_CONNS
+              value: "40"
+            - name: POSTGRES_MAX_IDLE_CONNS
+              value: "40"
+            - name: POSTGRES_CONN_MAX_IDLE_TIME
+              value: "5m"
+---
+# Caddy config for the gateway. Faithful to examples/standalone/Caddyfile,
+# minus the localhost:8443 TLS-internal block (TLS terminates at Cloudflare's
+# edge) and debug logging. Proxies /api/ledger/* -> ledger:3068 with CORS.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gateway-caddyfile
+  namespace: formance
+data:
+  Caddyfile: |
+    {
+    	order versions after metrics
+    }
+
+    :8080 {
+    	handle_path /api/ledger* {
+    		reverse_proxy ledger:3068
+    		header {
+    			Access-Control-Allow-Methods "GET,OPTIONS,PUT,POST,DELETE,HEAD,PATCH"
+    			Access-Control-Allow-Headers content-type
+    			Access-Control-Max-Age 100
+    			Access-Control-Allow-Origin *
+    			defer
+    		}
+    	}
+
+    	handle /versions {
+    		versions {
+    			region "local"
+    			env "local"
+    			endpoints {
+    				ledger /api/ledger/_info /api/ledger/_healthcheck
+    			}
+    		}
+    	}
+
+    	handle {
+    		respond "Bad Gateway" 502
+    	}
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gateway
+  namespace: formance
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: gateway }
+  template:
+    metadata:
+      labels: { app: gateway }
+      annotations:
+        # Bump to roll the pod when the Caddyfile ConfigMap changes.
+        checksum/caddyfile: caddyfile-v1
+    spec:
+      containers:
+        - name: gateway
+          image: ghcr.io/formancehq/gateway:v2.0.31
+          ports: [{ containerPort: 8080 }]
+          volumeMounts:
+            - name: caddyfile
+              mountPath: /etc/caddy/Caddyfile
+              subPath: Caddyfile
+      volumes:
+        - name: caddyfile
+          configMap: { name: gateway-caddyfile }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gateway
+  namespace: formance
+spec:
+  selector: { app: gateway }
+  ports: [{ port: 8080 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: console
+  namespace: formance
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: console }
+  template:
+    metadata:
+      labels: { app: console }
+    spec:
+      containers:
+        - name: console
+          image: ghcr.io/formancehq/console-v3:v2.2.1
+          env:
+            - name: PORT
+              value: "3000"
+            # MICRO_STACK=1 = single standalone stack (no Formance Cloud auth).
+            # The console's server-side BFF proxies to the gateway using this
+            # in-cluster URL, so the browser only ever talks to the console.
+            - name: MICRO_STACK
+              value: "1"
+            - name: API_STACK_URL
+              value: "http://gateway:8080/api"
+            - name: COOKIE_DOMAIN
+              value: "ledger.rithviknishad.dev"
+            - name: COOKIE_SECRET
+              valueFrom:
+                secretKeyRef: { name: formance-secret, key: COOKIE_SECRET }
+          ports: [{ containerPort: 3000 }]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: console
+  namespace: formance
+spec:
+  selector: { app: console }
+  ports: [{ port: 3000 }]
+---
+# Only the Console UI is exposed. The Ledger API and gateway stay in-cluster
+# (the console BFF reaches them). ledger.rithviknishad.dev must be gated by
+# Cloudflare Access — micro-stack mode has no login of its own. Create the
+# Access app BEFORE the DNS route (see docs/formance.md).
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: formance
+  namespace: formance
+spec:
+  rules:
+    - host: ledger.avocado.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: console
+                port:
+                  number: 3000
+    - host: ledger.rithviknishad.dev
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: console
+                port:
+                  number: 3000

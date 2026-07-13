@@ -107,6 +107,14 @@ Runs with **`hostNetwork: true`** so mDNS discovery and OTA updates reach the
 LAN — the exception to the usual ClusterIP pattern. Deployed via
 `just esphome-deploy`; documented on its own [ESPHome](esphome.md) page.
 
+### Formance Ledger (standalone) — `k8s/formance/`
+
+Programmable double-entry ledger + Console UI, deployed with kustomize plus a
+sops-encrypted Secret (`just formance-deploy`). Only the Console is exposed, at
+`https://ledger.rithviknishad.dev` (behind Cloudflare Access) — the Ledger API
+and Caddy gateway stay in-cluster. Documented on its own
+[Formance Ledger](formance.md) page.
+
 ## The monitoring workload
 
 The largest thing on the cluster is the observability stack under

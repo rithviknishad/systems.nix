@@ -65,6 +65,7 @@ flowchart LR
             grafana[grafana]
             gatus[gatus]
             esphome[esphome]
+            ledger[formance console]
         end
     end
 
@@ -75,6 +76,7 @@ flowchart LR
     traefik -->|grafana.rithviknishad.dev| grafana
     traefik -->|status.rithviknishad.dev| gatus
     traefik -->|esphome.rithviknishad.dev| esphome
+    traefik -->|ledger.rithviknishad.dev| ledger
 ```
 
 ### Public routing table
@@ -90,6 +92,7 @@ matched returns `http_status:404`.
 | `grafana.rithviknishad.dev` | `grafana` | [Monitoring](monitoring.md) |
 | `status.rithviknishad.dev` | Gatus `gatus` | [Monitoring](monitoring.md) |
 | `esphome.rithviknishad.dev` | ESPHome `esphome` | [ESPHome](esphome.md) |
+| `ledger.rithviknishad.dev` | Formance `console` | [Formance Ledger](formance.md) |
 
 Notes:
 
@@ -99,6 +102,9 @@ Notes:
   [Monitoring](monitoring.md#grafana-sso-cloudflare-access) page.
 - ESPHome **requires** Cloudflare Access (the dashboard has no auth) — create
   the Access app *before* the DNS route; see [ESPHome](esphome.md).
+- Formance Ledger **requires** Cloudflare Access (micro-stack mode has no login
+  of its own) — create the Access app *before* the DNS route; see
+  [Formance Ledger](formance.md).
 - The metrics/logs databases (VMSingle, VictoriaLogs) are **deliberately not**
   exposed through the tunnel — reach them over Tailscale.
 

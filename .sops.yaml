@@ -43,3 +43,12 @@ creation_rules:
       - age:
           - *admin
           - *avocado
+
+  # Formance Ledger k8s Secret (DB password, POSTGRES_URI, console COOKIE_SECRET).
+  # A full k8s Secret manifest, decrypted at deploy time on the admin machine
+  # (`just formance-deploy`); encrypted to avocado too for consistency.
+  - path_regex: secrets/formance\.enc\.yaml$
+    key_groups:
+      - age:
+          - *admin
+          - *avocado

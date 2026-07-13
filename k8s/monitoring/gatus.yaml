@@ -98,6 +98,19 @@ data:
         alerts:
           - type: ntfy
 
+      # Formance Ledger API (k8s/formance). Probes the server's own health
+      # endpoint via the in-cluster Service, not the public URL — the Console
+      # host sits behind Cloudflare Access, which would answer with a login
+      # redirect and mask a dead backend (same pattern as esphome above).
+      - name: formance-ledger
+        group: internal
+        url: "http://ledger.formance.svc:3068/_healthcheck"
+        interval: 1m
+        conditions:
+          - "[STATUS] == 200"
+        alerts:
+          - type: ntfy
+
       # --- Public endpoints (reachability + TLS expiry) ----------------------
       - name: rithviknishad.dev
         group: public
@@ -210,7 +223,7 @@ spec:
         app.kubernetes.io/name: gatus
       annotations:
         # Bump to roll the pod when the config changes.
-        checksum/config: config-v6
+        checksum/config: config-v7
     spec:
       securityContext:
         runAsNonRoot: true

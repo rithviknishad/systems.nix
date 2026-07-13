@@ -41,6 +41,11 @@ in
         # esphome.rithviknishad.dev`, or the dashboard (which can flash
         # firmware onto devices) is wide open. See docs/esphome.md.
         "esphome.rithviknishad.dev" = "http://localhost:80";
+        # Formance Ledger Console (k8s/formance) — micro-stack mode has NO
+        # login of its own, so this host MUST be gated by Cloudflare Access.
+        # Create the Access app BEFORE `cloudflared tunnel route dns avocado
+        # ledger.rithviknishad.dev`. See docs/formance.md.
+        "ledger.rithviknishad.dev" = "http://localhost:80";
       };
     };
   };
