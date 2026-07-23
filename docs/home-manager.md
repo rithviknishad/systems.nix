@@ -32,6 +32,7 @@ It ships two ways (see [the flake](nix-modules.md#the-flake-flakenix)):
 | `opencode` | installs the `opencode` terminal AI agent |
 | `lens` | installs Lens (Kubernetes IDE, unfree) |
 | `claude-code` | installs Claude Code (unfree) |
+| `python` | installs `python3`; its bundled `python` symlink makes `python` resolve to python3 |
 
 ## Notable details
 

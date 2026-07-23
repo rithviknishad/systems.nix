@@ -15,6 +15,7 @@
     ./apps/ssh
     ./apps/claude-code
     ./apps/direnv
+    ./apps/python
   ];
 
   home.username = "rithviknishad";
