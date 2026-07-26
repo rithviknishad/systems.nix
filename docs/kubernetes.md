@@ -115,6 +115,61 @@ sops-encrypted Secret (`just formance-deploy`). Only the Console is exposed, at
 and Caddy gateway stay in-cluster. Documented on its own
 [Formance Ledger](formance.md) page.
 
+### Bingo (multiplayer game) — `k8s/bingo/`
+
+Classic 1–25 multiplayer bingo ([sonzsara/bingo-app](https://github.com/sonzsara/bingo-app),
+boardgame.io). Deployed with kustomize (`just bingo-deploy`); public at
+`https://bingo.rithviknishad.dev`.
+
+Unlike the other workloads, there is **no upstream or registry image** — the
+image is **built by Nix in this repo and preloaded into k3s**, so the whole
+thing stays declarative and pinned:
+
+```mermaid
+flowchart TB
+    input[flake input: bingo-app pinned] --> pkg[pkgs/bingo<br/>buildNpmPackage + dockerTools]
+    pkg --> img[OCI image bingo-app:latest]
+    img -->|services.k3s.images<br/>modules/bingo.nix| ctr[(containerd)]
+    ctr --> pod[bingo pod :8000]
+    ing[Ingress: bingo.rithviknishad.dev] --> svc[Service bingo :8000] --> pod
+```
+
+- **Single origin.** `server.cjs` (Koa) serves the built SPA *and* the
+  boardgame.io multiplayer API + websocket on one port (8000). The public
+  `VITE_SERVER_URL` is baked at build time so the browser's socket connects
+  same-origin over 443 — the tunnel only forwards `:443 → localhost:80`, never
+  `:8000`, so the app's default `<host>:8000` fallback would fail. Websockets
+  ride the tunnel + Traefik unmodified.
+- **`replicas: 1` is deliberate** — matches live in in-memory boardgame.io
+  storage, so all players in a match must share one process. Scaling out needs
+  a shared storage adapter.
+- **Public by intent, Access-gated today.** It's a party game meant to be
+  public, but `bingo.rithviknishad.dev` currently sits behind Cloudflare Access
+  (a `*.rithviknishad.dev` policy) and answers unauthenticated requests with a
+  login `302`. Exclude the host from that policy to make it truly public. For
+  this reason its [uptime probe](monitoring.md) hits the in-cluster Service
+  (`bingo.bingo.svc:8000`), not the public URL — same as esphome/formance — so
+  a login redirect can't mask a dead backend.
+
+| Component | Image | Notes |
+|---|---|---|
+| `bingo` | `bingo-app:latest` (Nix-built, k3s-preloaded) | SPA + boardgame.io server on `:8000` |
+
+**Deploy / update:**
+
+```sh
+just bingo-deploy                 # apply namespace/deployment/service/ingress
+cloudflared tunnel route dns avocado bingo.rithviknishad.dev   # one-time
+
+# Bump the app to a newer upstream commit:
+just update bingo-app             # then recompute npmDepsHash in pkgs/bingo
+just deploy                       # rebuilds + re-imports the image (restarts k3s)
+kubectl -n bingo rollout restart deploy/bingo
+```
+
+The image reaches the box through the normal `just deploy` (k3s preloads it via
+`services.k3s.images`) — `just bingo-deploy` only applies the manifests.
+
 ## The monitoring workload
 
 The largest thing on the cluster is the observability stack under

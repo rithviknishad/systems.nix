@@ -66,6 +66,7 @@ flowchart LR
             gatus[gatus]
             esphome[esphome]
             ledger[formance console]
+            bingo[bingo]
         end
     end
 
@@ -77,6 +78,7 @@ flowchart LR
     traefik -->|status.rithviknishad.dev| gatus
     traefik -->|esphome.rithviknishad.dev| esphome
     traefik -->|ledger.rithviknishad.dev| ledger
+    traefik -->|bingo.rithviknishad.dev| bingo
 ```
 
 ### Public routing table
@@ -93,6 +95,7 @@ matched returns `http_status:404`.
 | `status.rithviknishad.dev` | Gatus `gatus` | [Monitoring](monitoring.md) |
 | `esphome.rithviknishad.dev` | ESPHome `esphome` | [ESPHome](esphome.md) |
 | `ledger.rithviknishad.dev` | Formance `console` | [Formance Ledger](formance.md) |
+| `bingo.rithviknishad.dev` | Bingo `bingo` | [Kubernetes](kubernetes.md) |
 
 Notes:
 

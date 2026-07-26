@@ -46,6 +46,10 @@ in
         # Create the Access app BEFORE `cloudflared tunnel route dns avocado
         # ledger.rithviknishad.dev`. See docs/formance.md.
         "ledger.rithviknishad.dev" = "http://localhost:80";
+        # Bingo multiplayer game (k8s/bingo) — public by design (party game).
+        # Single-origin: the same host serves the SPA and the boardgame.io
+        # websocket, which Traefik + this tunnel proxy without extra config.
+        "bingo.rithviknishad.dev" = "http://localhost:80";
       };
     };
   };

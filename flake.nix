@@ -24,6 +24,14 @@
       url = "github:nix-community/nixos-anywhere";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+
+    # Third-party app deployed on the cluster (bingo.rithviknishad.dev). Pinned
+    # source only (flake = false); built by pkgs/bingo. Bump: `just update
+    # bingo-app`, then recompute npmDepsHash in pkgs/bingo/default.nix.
+    bingo-app = {
+      url = "github:sonzsara/bingo-app";
+      flake = false;
+    };
   };
 
   outputs =
@@ -63,6 +71,28 @@
         extraSpecialArgs = { inherit inputs; };
         modules = [ ./home/rithviknishad ];
       };
+
+      # Buildable packages. `bingo-image` is the OCI tarball k3s preloads
+      # (see modules/bingo.nix); `bingo-app` is the built app on its own.
+      packages = forAllSystems (
+        system:
+        let
+          pkgs = nixpkgs.legacyPackages.${system};
+          bingo = pkgs.callPackage ./pkgs/bingo {
+            src = inputs.bingo-app;
+            version = inputs.bingo-app.shortRev or "dev";
+            # vite 8 needs a recent Node; pin it rather than track the default.
+            nodejs = pkgs.nodejs_22;
+          };
+        in
+        {
+          bingo-app = bingo.app;
+        }
+        // nixpkgs.lib.optionalAttrs pkgs.stdenv.isLinux {
+          # dockerTools images build on Linux only.
+          bingo-image = bingo.image;
+        }
+      );
 
       # `nix develop` — everything needed to work with this repo.
       devShells = forAllSystems (

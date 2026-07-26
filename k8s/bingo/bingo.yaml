@@ -1,0 +1,89 @@
+# Bingo — classic 1-25 multiplayer bingo (boardgame.io) on k3s.
+#
+# Deploy:   just bingo-deploy   (kubectl apply -k k8s/bingo)
+# Watch:    kubectl -n bingo get pods -w
+# Visit:    https://bingo.rithviknishad.dev  (after tunnel route + ingress)
+#
+# Single-origin app: server.cjs (Koa) serves the built SPA *and* the
+# boardgame.io multiplayer API + websocket, all on :8000. The image is built by
+# Nix (pkgs/bingo) and preloaded into containerd by k3s (modules/bingo.nix), so
+# imagePullPolicy is IfNotPresent and there is no registry.
+#
+# replicas: 1 is deliberate — boardgame.io uses in-memory match storage here,
+# so every player in a match must land on the same process. Scaling out would
+# need a shared backend (e.g. the boardgame.io Postgres/Redis adapters).
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: bingo
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bingo
+  namespace: bingo
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: bingo }
+  template:
+    metadata:
+      labels: { app: bingo }
+    spec:
+      containers:
+        - name: bingo
+          image: bingo-app:latest
+          imagePullPolicy: IfNotPresent
+          ports: [{ containerPort: 8000 }]
+          readinessProbe:
+            httpGet: { path: /, port: 8000 }
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /, port: 8000 }
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          resources:
+            requests: { cpu: "25m", memory: "64Mi" }
+            limits: { cpu: "500m", memory: "256Mi" }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: bingo
+  namespace: bingo
+spec:
+  selector: { app: bingo }
+  ports: [{ port: 8000, targetPort: 8000 }]
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: bingo
+  namespace: bingo
+spec:
+  rules:
+    # Public host (Cloudflare Tunnel -> Traefik). Websockets pass through both
+    # by default, so the boardgame.io socket.io connection works unmodified.
+    - host: bingo.rithviknishad.dev
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: bingo
+                port:
+                  number: 8000
+    # Tailnet host: curl -H 'Host: bingo.avocado.local' http://avocado/
+    - host: bingo.avocado.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: bingo
+                port:
+                  number: 8000

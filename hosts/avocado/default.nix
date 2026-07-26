@@ -18,6 +18,7 @@
     ../../modules/monitoring.nix
     ../../modules/cloudflared.nix
     ../../modules/esphome.nix
+    ../../modules/bingo.nix
     ../../users/rithviknishad.nix
   ];
 

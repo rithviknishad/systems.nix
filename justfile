@@ -204,3 +204,28 @@ formance-secrets:
 # Re-encrypt the Formance secret after changing recipients in .sops.yaml.
 formance-secrets-rekey:
     sops updatekeys secrets/formance.enc.yaml
+
+# --- Bingo (boardgame.io multiplayer party game) -----------------------------
+# Single-origin app: server.cjs (Koa) serves the built SPA *and* the
+# boardgame.io multiplayer API/websocket on :8000. The image is built by Nix
+# (pkgs/bingo, from the pinned `bingo-app` flake input) and preloaded into k3s
+# via services.k3s.images (modules/bingo.nix) during `just deploy` — no
+# registry. Public at https://bingo.rithviknishad.dev. See docs/kubernetes.md.
+
+# Deploy the bingo manifests (namespace, deployment, service, ingress).
+# The image itself lands on the box via `just deploy` (k3s preload), not here.
+bingo-deploy:
+    KUBECONFIG={{kubeconfig_path}} kubectl apply -k k8s/bingo
+
+# Show the state of the bingo namespace.
+bingo-status:
+    KUBECONFIG={{kubeconfig_path}} kubectl -n bingo get pods,svc,ingress
+
+# Tail the bingo server logs.
+bingo-logs:
+    KUBECONFIG={{kubeconfig_path}} kubectl -n bingo logs -f deploy/bingo
+
+# Build the OCI image locally to inspect it (deploy preloads it into k3s for
+# real; this is just for debugging the build).
+bingo-image:
+    nix build .#packages.x86_64-linux.bingo-image

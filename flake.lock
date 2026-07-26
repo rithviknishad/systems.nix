@@ -1,5 +1,21 @@
 {
   "nodes": {
+    "bingo-app": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1784978108,
+        "narHash": "sha256-r/aJuJUOJ3vzeB3KvtlQaKsMtQzKH6DzHRmB3ykemd8=",
+        "owner": "sonzsara",
+        "repo": "bingo-app",
+        "rev": "e198303ea1bd0c1332af9c3267c2287ddb314abb",
+        "type": "github"
+      },
+      "original": {
+        "owner": "sonzsara",
+        "repo": "bingo-app",
+        "type": "github"
+      }
+    },
     "disko": {
       "inputs": {
         "nixpkgs": [
@@ -167,6 +183,7 @@
     },
     "root": {
       "inputs": {
+        "bingo-app": "bingo-app",
         "disko": "disko",
         "home-manager": "home-manager",
         "nixos-anywhere": "nixos-anywhere",
