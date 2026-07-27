@@ -50,6 +50,20 @@ in
         # Single-origin: the same host serves the SPA and the boardgame.io
         # websocket, which Traefik + this tunnel proxy without extra config.
         "bingo.rithviknishad.dev" = "http://localhost:80";
+        # CARE HMIS + TeleICU (k8s/care, k8s/care-teleicu) — public by design
+        # (CARE has its own auth). Hostnames are FLATTENED to one label:
+        # Cloudflare's free Universal SSL cert only covers *.rithviknishad.dev,
+        # so *.care.rithviknishad.dev would fail TLS at the edge.
+        #   care      -> care_fe SPA        care-api -> Django API
+        #   care-s3   -> MinIO (presigned upload/download URLs; Cloudflare's
+        #                free-plan ~100MB request-body cap limits upload size)
+        #   care-teleicu-gateway -> gateway nginx (streams + middleware)
+        #   care-teleicu-devices -> devices micro-frontend (loaded by the SPA)
+        "care.rithviknishad.dev" = "http://localhost:80";
+        "care-api.rithviknishad.dev" = "http://localhost:80";
+        "care-s3.rithviknishad.dev" = "http://localhost:80";
+        "care-teleicu-gateway.rithviknishad.dev" = "http://localhost:80";
+        "care-teleicu-devices.rithviknishad.dev" = "http://localhost:80";
       };
     };
   };

@@ -1,0 +1,482 @@
+# TeleICU stack for CARE on k3s: gateway middleware + RTSPtoWeb stream server
+# + devices micro-frontend + mock devices for testing.
+#
+# Deploy:   just care-teleicu-deploy      (manifests + sops secret)
+# Images:   just care-teleicu-images      (care-teleicu-devices-fe:local,
+#           mock-ptz-camera:local — built on the box; gateway images are
+#           published upstream at ghcr.io/10bedicu)
+# Visit:    https://care-teleicu-gateway.rithviknishad.dev  (gateway, via nginx)
+#           https://care-teleicu-devices.rithviknishad.dev  (MFE remote)
+#
+# Wiring (see docs/care.md for the post-deploy manual steps):
+#   mock devices --> gateway (daphne :8090) --> CARE API (JWT signed with the
+#   gateway's JWKS; CARE verifies against the gateway's public JWKS endpoint).
+#   Browsers reach streams through the upstream nginx (:8001), which fronts
+#   both the middleware and RTSPtoWeb (:8080).
+#
+# >>> Service names `teleicu-middleware` and `stream-server` are LOAD-BEARING:
+#     the upstream nginx image hardcodes those upstream hostnames.
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: care-teleicu
+---
+# --- Non-secret gateway configuration ----------------------------------------
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: teleicu-env
+  namespace: care-teleicu
+data:
+  # The gateway calls CARE over the public host — same URL CARE stores as the
+  # gateway device endpoint, keeping one canonical origin for the JWKS trust.
+  CARE_API: https://care-api.rithviknishad.dev
+  HOST_NAME: care-teleicu-gateway.rithviknishad.dev
+  # Comma-separated (django-environ list). "*" because kubelet probes and the
+  # in-cluster mock devices hit the pod/service directly by IP or svc name.
+  ALLOWED_HOSTS: "*"
+  CSRF_TRUSTED_ORIGINS: https://care-teleicu-gateway.rithviknishad.dev
+  # Browser origin that consumes the gateway's APIs (the MFE runs inside the
+  # care SPA's origin).
+  CORS_ALLOWED_ORIGINS: https://care.rithviknishad.dev
+  REDIS_URL: redis://redis:6379
+  # Snapshots bucket on the shared MinIO in the care namespace (creds in the
+  # secret; bucket created by the minio-buckets Job over there).
+  S3_ENDPOINT_URL: http://minio.care.svc.cluster.local:9000
+  S3_BUCKET_NAME: teleicu-gateway
+  # Filled in AFTER registering the gateway device in the CARE UI (its ID is
+  # only known then) — see docs/care.md; restart the middleware after editing.
+  GATEWAY_DEVICE_ID: ""
+---
+# --- Postgres -----------------------------------------------------------------
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: teleicu-db
+  namespace: care-teleicu
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  namespace: care-teleicu
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector:
+    matchLabels: { app: postgres }
+  template:
+    metadata:
+      labels: { app: postgres }
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:17-alpine
+          envFrom:
+            - secretRef: { name: teleicu-secret }
+          ports: [{ containerPort: 5432 }]
+          volumeMounts:
+            - name: db
+              mountPath: /var/lib/postgresql/data
+      volumes:
+        - name: db
+          persistentVolumeClaim: { claimName: teleicu-db }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: care-teleicu
+spec:
+  selector: { app: postgres }
+  ports: [{ port: 5432 }]
+---
+# --- Redis (cache, channels layer, celery broker, observation fan-out) --------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: care-teleicu
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: redis }
+  template:
+    metadata:
+      labels: { app: redis }
+    spec:
+      containers:
+        - name: redis
+          image: redis:7.2
+          ports: [{ containerPort: 6379 }]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: care-teleicu
+spec:
+  selector: { app: redis }
+  ports: [{ port: 6379 }]
+---
+# --- Gateway middleware (daphne: DRF + websockets) ----------------------------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: teleicu-middleware
+  namespace: care-teleicu
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: teleicu-middleware }
+  template:
+    metadata:
+      labels: { app: teleicu-middleware }
+    spec:
+      # Same rationale as the care backend: don't let Service link env vars
+      # (POSTGRES_PORT=tcp://..., REDIS_PORT=...) shadow app settings.
+      enableServiceLinks: false
+      containers:
+        - name: middleware
+          image: ghcr.io/10bedicu/teleicu_gateway:latest
+          # collectstatic + daphne on :8090 (upstream compose command).
+          command: [sh, /app/start-backend.sh]
+          envFrom:
+            - configMapRef: { name: teleicu-env }
+            - secretRef: { name: teleicu-secret }
+          ports: [{ containerPort: 8090 }]
+          # No dedicated health endpoint upstream; any HTTP answer from
+          # daphne (even a 404) proves the ASGI server is up, and readiness
+          # on / (200: gateway serves a status page) keeps it out of the
+          # Service until static files are collected.
+          readinessProbe:
+            httpGet: { path: /, port: 8090 }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket: { port: 8090 }
+            initialDelaySeconds: 30
+            periodSeconds: 30
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: teleicu-middleware
+  namespace: care-teleicu
+spec:
+  selector: { app: teleicu-middleware }
+  ports: [{ port: 8090 }]
+---
+# --- Gateway celery (worker + beat in one, runs migrations first — upstream) ---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: teleicu-celery
+  namespace: care-teleicu
+spec:
+  replicas: 1
+  # Recreate: embedded beat (-B) must be a singleton, and this pod runs the
+  # DB migrations on start.
+  strategy: { type: Recreate }
+  selector:
+    matchLabels: { app: teleicu-celery }
+  template:
+    metadata:
+      labels: { app: teleicu-celery }
+    spec:
+      enableServiceLinks: false # see teleicu-middleware
+      containers:
+        - name: celery
+          image: ghcr.io/10bedicu/teleicu_gateway:latest
+          command: [sh, /app/start-celery.sh]
+          envFrom:
+            - configMapRef: { name: teleicu-env }
+            - secretRef: { name: teleicu-secret }
+---
+# --- RTSPtoWeb (stream server) --------------------------------------------------
+# Config template lives in the ConfigMap; an initContainer copies it to an
+# emptyDir because RTSPtoWeb wants to WRITE the config back when streams are
+# (de)registered via its API — a read-only ConfigMap mount would break that.
+# Streams are runtime state (re-registered by the gateway), so losing them on
+# pod restart is fine.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rtsptoweb-config
+  namespace: care-teleicu
+data:
+  config.json: |
+    {
+      "server": {
+        "debug": false,
+        "http_port": ":8080",
+        "ice_servers": ["stun:stun.l.google.com:19302"],
+        "token": {
+          "enable": true,
+          "backend": "http://teleicu-middleware:8090/verifyToken"
+        }
+      },
+      "streams": {},
+      "channel_defaults": {
+        "on_demand": true
+      }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: stream-server
+  namespace: care-teleicu
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: stream-server }
+  template:
+    metadata:
+      labels: { app: stream-server }
+    spec:
+      initContainers:
+        - name: seed-config
+          image: busybox:1.37
+          command: [cp, /seed/config.json, /config/config.json]
+          volumeMounts:
+            - name: seed
+              mountPath: /seed
+            - name: config
+              mountPath: /config
+      containers:
+        - name: rtsptoweb
+          image: ghcr.io/deepch/rtsptoweb:latest
+          ports: [{ containerPort: 8080 }]
+          volumeMounts:
+            - name: config
+              mountPath: /config
+      volumes:
+        - name: seed
+          configMap: { name: rtsptoweb-config }
+        - name: config
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: stream-server
+  namespace: care-teleicu
+spec:
+  selector: { app: stream-server }
+  ports: [{ port: 8080 }]
+---
+# --- Upstream nginx reverse-proxy (:8001) --------------------------------------
+# Fronts middleware + RTSPtoWeb on the paths browsers use (/stream, /start,
+# /list, /stop -> stream-server; everything else -> middleware) and blocks
+# /update_observations from outside (only in-cluster devices may push vitals).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: reverse-proxy
+  namespace: care-teleicu
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: reverse-proxy }
+  template:
+    metadata:
+      labels: { app: reverse-proxy }
+    spec:
+      containers:
+        - name: nginx
+          image: ghcr.io/10bedicu/teleicu_gateway_nginx:latest
+          ports: [{ containerPort: 8001 }]
+          # / proxies to the middleware status page — this image's conf 404s
+          # on /test in this build, so readiness deliberately couples nginx to
+          # a reachable middleware (the public host is useless without it).
+          readinessProbe:
+            httpGet: { path: /, port: 8001 }
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: reverse-proxy
+  namespace: care-teleicu
+spec:
+  selector: { app: reverse-proxy }
+  ports: [{ port: 8001 }]
+---
+# --- Devices micro-frontend (module federation remote for care_fe) -------------
+# Static bundle behind nginx; upstream's nginx.conf already sends
+# Access-Control-Allow-Origin: * (required — the care SPA loads
+# remoteEntry.js cross-origin) and serves /health.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: teleicu-devices-fe
+  namespace: care-teleicu
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: teleicu-devices-fe }
+  template:
+    metadata:
+      labels: { app: teleicu-devices-fe }
+    spec:
+      containers:
+        - name: nginx
+          image: care-teleicu-devices-fe:local
+          # :local images exist only inside k3s's containerd (imported by
+          # `just care-teleicu-images`); Never makes a missed import obvious.
+          imagePullPolicy: Never
+          ports: [{ containerPort: 80 }]
+          readinessProbe:
+            httpGet: { path: /health, port: 80 }
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: teleicu-devices-fe
+  namespace: care-teleicu
+spec:
+  selector: { app: teleicu-devices-fe }
+  ports: [{ port: 80 }]
+---
+# --- Mock devices (testing only — NOT exposed publicly) -------------------------
+# ONVIF PTZ camera simulator: ONVIF+web UI on :8080, RTSP on :8554. The
+# gateway is configured against it manually in the CARE UI using the
+# in-cluster address (see docs/care.md). WS-Discovery multicast doesn't cross
+# the pod network, but device onboarding in CARE is by explicit address
+# anyway.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mock-ptz-camera
+  namespace: care-teleicu
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: mock-ptz-camera }
+  template:
+    metadata:
+      labels: { app: mock-ptz-camera }
+    spec:
+      containers:
+        - name: camera
+          image: mock-ptz-camera:local
+          imagePullPolicy: Never
+          env:
+            # Mock creds — internal-only service, not worth a Secret.
+            - name: CAMERA_USER
+              value: admin
+            - name: CAMERA_PASS
+              value: admin
+            # Advertised in ONVIF responses / RTSP URLs; must be resolvable
+            # by RTSPtoWeb and the gateway (both in-cluster).
+            - name: HOST_IP
+              value: mock-ptz-camera.care-teleicu.svc.cluster.local
+            # Plain HTTP/RTSP in-cluster; TLS here would only add self-signed
+            # cert friction for the gateway's ONVIF client.
+            - name: TLS_ENABLED
+              value: "false"
+            - name: RENDERER
+              value: testpattern
+          ports:
+            - containerPort: 8080
+            - containerPort: 8554
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mock-ptz-camera
+  namespace: care-teleicu
+spec:
+  selector: { app: mock-ptz-camera }
+  ports:
+    - name: http
+      port: 8080
+    - name: rtsp
+      port: 8554
+---
+# Mock vitals sources: POST observations to the middleware every few seconds
+# (outbound-only, no ports). One HL7 monitor + one ventilator, mirroring
+# upstream's compose. They hit the middleware Service directly — the public
+# nginx 404s /update_observations by design.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mock-vitals-hl7
+  namespace: care-teleicu
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: mock-vitals-hl7 }
+  template:
+    metadata:
+      labels: { app: mock-vitals-hl7 }
+    spec:
+      containers:
+        - name: mock
+          image: ghcr.io/10bedicu/mock-teleicu-devices:latest
+          env:
+            - name: MIDDLEWARE_ADDRESS
+              value: http://teleicu-middleware:8090
+            - name: MOCK_DATA_SOURCE
+              value: mock_data/hl7-monitor.json
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mock-vitals-ventilator
+  namespace: care-teleicu
+spec:
+  # Parked at 0: the current ghcr teleicu_gateway rejects ventilator
+  # observation IDs (PEEP etc.) — its pydantic Observation enum only knows
+  # monitor vitals — so this mock 500s and crash-loops. Re-enable when
+  # upstream's schema learns ventilator observations.
+  replicas: 0
+  selector:
+    matchLabels: { app: mock-vitals-ventilator }
+  template:
+    metadata:
+      labels: { app: mock-vitals-ventilator }
+    spec:
+      containers:
+        - name: mock
+          image: ghcr.io/10bedicu/mock-teleicu-devices:latest
+          env:
+            - name: MIDDLEWARE_ADDRESS
+              value: http://teleicu-middleware:8090
+            - name: MOCK_DATA_SOURCE
+              value: mock_data/ventilator.json
+---
+# --- Ingress --------------------------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: care-teleicu
+  namespace: care-teleicu
+spec:
+  rules:
+    - host: care-teleicu-gateway.rithviknishad.dev
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: reverse-proxy
+                port: { number: 8001 }
+    - host: care-teleicu-devices.rithviknishad.dev
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: teleicu-devices-fe
+                port: { number: 80 }

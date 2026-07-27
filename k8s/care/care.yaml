@@ -1,0 +1,403 @@
+# CARE (Open Healthcare Network HMIS) on k3s.
+#
+# Deploy:   just care-deploy        (manifests + sops secret)
+# Images:   just care-images        (care-backend:local, care-fe:local — built
+#           on the box with docker and imported into k3s; see docs/care.md)
+# Visit:    https://care.rithviknishad.dev (SPA)
+#           https://care-api.rithviknishad.dev (Django API)
+#
+# Architecture: care_fe (static SPA, nginx) + care backend (Django/gunicorn
+# :9000) + celery worker + celery beat (beat also runs DB migrations on start,
+# mirroring upstream's docker-compose), backed by Postgres 17, Redis and MinIO
+# (S3-compatible object storage for file uploads — presigned URLs are handed
+# to browsers, hence the public care-s3 host).
+#
+# The backend image has the TeleICU devices plugs baked in at BUILD time
+# (upstream installs ADDITIONAL_PLUGS via pip in the Dockerfile builder
+# stage); the same JSON must be present at RUNTIME (ConfigMap below) so the
+# plugin apps are added to INSTALLED_APPS. See k8s/care/additional-plugs.json.
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: care
+---
+# --- Non-secret backend configuration ---------------------------------------
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: care-backend-env
+  namespace: care
+data:
+  DJANGO_SETTINGS_MODULE: config.settings.deployment
+  # TLS terminates at Cloudflare's edge; the tunnel->Traefik->pod hop is plain
+  # http, so Django's forced SSL redirect would loop. Trust the edge instead.
+  DJANGO_SECURE_SSL_REDIRECT: "false"
+  # JSON list. "*" because kubelet probes (and in-cluster clients) hit the pod
+  # by IP; Host-header routing is Traefik's job and the API is public anyway.
+  DJANGO_ALLOWED_HOSTS: '["*"]'
+  # Browser origin of the SPA (the MFE loads inside this origin too).
+  CORS_ALLOWED_ORIGINS: '["https://care.rithviknishad.dev"]'
+  CSRF_TRUSTED_ORIGINS: '["https://care-api.rithviknishad.dev"]'
+  CURRENT_DOMAIN: https://care.rithviknishad.dev
+  BACKEND_DOMAIN: https://care-api.rithviknishad.dev
+  REDIS_URL: redis://redis:6379/0
+  CELERY_BROKER_URL: redis://redis:6379/0
+  # wait_for_db.sh connects with these directly (DATABASE_URL in the secret
+  # covers Django itself). Keep in sync with the postgres Service + secret.
+  POSTGRES_HOST: postgres
+  POSTGRES_PORT: "5432"
+  GUNICORN_WORKERS: "2"
+  CELERY_WORKER_CONCURRENCY: "2"
+  # Object storage: internal endpoint is the in-cluster MinIO service; the
+  # external endpoint is what presigned URLs (used by browsers for uploads/
+  # downloads) are generated against. NOTE: Cloudflare's free plan caps
+  # request bodies at ~100MB, so uploads beyond that will fail at the edge.
+  BUCKET_PROVIDER: MINIO
+  BUCKET_REGION: us-east-1
+  BUCKET_ENDPOINT: http://minio:9000
+  BUCKET_EXTERNAL_ENDPOINT: https://care-s3.rithviknishad.dev
+  FILE_UPLOAD_BUCKET: care-uploads
+  FACILITY_S3_BUCKET: care-facility
+  # MUST stay semantically in sync with k8s/care/additional-plugs.json (used
+  # at image build time): build installs the pip packages, this makes Django
+  # load the plugin apps.
+  ADDITIONAL_PLUGS: '[{"name": "gateway_device", "package_name": "git+https://github.com/10bedicu/care_teleicu_devices.git", "version": "@main"}, {"name": "camera_device", "package_name": "git+https://github.com/10bedicu/care_teleicu_devices.git", "version": "@main"}, {"name": "vitals_observation_device", "package_name": "git+https://github.com/10bedicu/care_teleicu_devices.git", "version": "@main"}]'
+---
+# --- MinIO (S3-compatible object storage) ------------------------------------
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: minio-data
+  namespace: care
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 50Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: minio
+  namespace: care
+spec:
+  replicas: 1
+  # Recreate: two MinIOs on the same local-path data dir would fight.
+  strategy: { type: Recreate }
+  selector:
+    matchLabels: { app: minio }
+  template:
+    metadata:
+      labels: { app: minio }
+    spec:
+      containers:
+        - name: minio
+          # Unpinned deliberately: MinIO tags are dated snapshots and stale
+          # pins rot; single-node API-only use is a stable surface.
+          image: quay.io/minio/minio:latest
+          args: [server, /data]
+          envFrom:
+            - secretRef: { name: care-secret }
+          ports: [{ containerPort: 9000 }]
+          readinessProbe:
+            httpGet: { path: /minio/health/live, port: 9000 }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: minio-data }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: minio
+  namespace: care
+spec:
+  selector: { app: minio }
+  ports: [{ port: 9000 }]
+---
+# One-shot bucket bootstrap. Idempotent (--ignore-existing), safe to re-apply.
+# The teleicu-gateway bucket lives here too — MinIO is shared with the
+# k8s/care-teleicu stack.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: minio-buckets
+  namespace: care
+spec:
+  backoffLimit: 20
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: mc
+          image: quay.io/minio/mc:latest
+          envFrom:
+            - secretRef: { name: care-secret }
+          command:
+            - sh
+            - -c
+            - |
+              until mc alias set minio http://minio:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD"; do
+                echo "waiting for minio..."; sleep 3
+              done
+              mc mb --ignore-existing minio/care-uploads minio/care-facility minio/teleicu-gateway
+---
+# --- Postgres -----------------------------------------------------------------
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: care-db
+  namespace: care
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  namespace: care
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector:
+    matchLabels: { app: postgres }
+  template:
+    metadata:
+      labels: { app: postgres }
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:17-alpine
+          envFrom:
+            - secretRef: { name: care-secret }
+          ports: [{ containerPort: 5432 }]
+          volumeMounts:
+            - name: db
+              mountPath: /var/lib/postgresql/data
+      volumes:
+        - name: db
+          persistentVolumeClaim: { claimName: care-db }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: care
+spec:
+  selector: { app: postgres }
+  ports: [{ port: 5432 }]
+---
+# --- Redis --------------------------------------------------------------------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: care
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: redis }
+  template:
+    metadata:
+      labels: { app: redis }
+    spec:
+      containers:
+        - name: redis
+          image: redis:8-alpine
+          ports: [{ containerPort: 6379 }]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: care
+spec:
+  selector: { app: redis }
+  ports: [{ port: 6379 }]
+---
+# --- care backend: API (gunicorn) ---------------------------------------------
+# imagePullPolicy Never on all :local images — they only exist inside k3s's
+# containerd (imported by `just care-images`); a pull attempt means the
+# import step was skipped, and Never makes that failure mode obvious.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: care-backend
+  namespace: care
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: care-backend }
+  template:
+    metadata:
+      labels: { app: care-backend }
+    spec:
+      # Kill k8s docker-link env injection: the `postgres` Service would
+      # otherwise inject POSTGRES_PORT=tcp://... which upstream's
+      # wait_for_db.sh reads as a port number and dies.
+      enableServiceLinks: false
+      containers:
+        - name: api
+          image: care-backend:local
+          imagePullPolicy: Never
+          command: [bash, start.sh]
+          envFrom:
+            - configMapRef: { name: care-backend-env }
+            - secretRef: { name: care-secret }
+          ports: [{ containerPort: 9000 }]
+          # First boot 500s until celery-beat finishes migrations — that's
+          # upstream's ordering (beat migrates, api waits); readiness just
+          # keeps it out of the Service until then.
+          readinessProbe:
+            httpGet: { path: /ping/, port: 9000 }
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /ping/, port: 9000 }
+            initialDelaySeconds: 60
+            periodSeconds: 30
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: care-backend
+  namespace: care
+spec:
+  selector: { app: care-backend }
+  ports: [{ port: 9000 }]
+---
+# --- care backend: celery worker ----------------------------------------------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: care-celery-worker
+  namespace: care
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: care-celery-worker }
+  template:
+    metadata:
+      labels: { app: care-celery-worker }
+    spec:
+      enableServiceLinks: false # see care-backend
+      containers:
+        - name: worker
+          image: care-backend:local
+          imagePullPolicy: Never
+          command: [bash, celery_worker.sh]
+          envFrom:
+            - configMapRef: { name: care-backend-env }
+            - secretRef: { name: care-secret }
+---
+# --- care backend: celery beat (also runs migrations, like upstream compose) ---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: care-celery-beat
+  namespace: care
+spec:
+  replicas: 1
+  # Recreate: two beats = duplicate scheduled tasks; also serializes the
+  # migrate/sync steps the script runs before beat starts.
+  strategy: { type: Recreate }
+  selector:
+    matchLabels: { app: care-celery-beat }
+  template:
+    metadata:
+      labels: { app: care-celery-beat }
+    spec:
+      enableServiceLinks: false # see care-backend
+      containers:
+        - name: beat
+          image: care-backend:local
+          imagePullPolicy: Never
+          command: [bash, celery_beat.sh]
+          envFrom:
+            - configMapRef: { name: care-backend-env }
+            - secretRef: { name: care-secret }
+          # celery_beat.sh touches /tmp/healthy once migrations + beat are up;
+          # generous startup budget — first migrate + valueset sync is slow.
+          startupProbe:
+            exec:
+              command: [test, -f, /tmp/healthy]
+            periodSeconds: 10
+            failureThreshold: 120
+---
+# --- care_fe (static SPA behind nginx) -----------------------------------------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: care-fe
+  namespace: care
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: care-fe }
+  template:
+    metadata:
+      labels: { app: care-fe }
+    spec:
+      containers:
+        - name: nginx
+          image: care-fe:local
+          imagePullPolicy: Never
+          ports: [{ containerPort: 80 }]
+          readinessProbe:
+            httpGet: { path: /, port: 80 }
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: care-fe
+  namespace: care
+spec:
+  selector: { app: care-fe }
+  ports: [{ port: 80 }]
+---
+# --- Ingress (Traefik routes by Host; public via the Cloudflare Tunnel) --------
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: care
+  namespace: care
+spec:
+  rules:
+    - host: care.rithviknishad.dev
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: care-fe
+                port: { number: 80 }
+    - host: care-api.rithviknishad.dev
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: care-backend
+                port: { number: 9000 }
+    # Public S3 endpoint — only meaningfully reachable via presigned URLs
+    # (unauthenticated bucket listing is denied by MinIO itself).
+    - host: care-s3.rithviknishad.dev
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: minio
+                port: { number: 9000 }

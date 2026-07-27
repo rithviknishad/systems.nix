@@ -173,6 +173,16 @@ Runs a named tunnel that maps public subdomains of `rithviknishad.dev`
 (Traefik), with a default `http_status:404`. Credentials come from a sops
 binary secret. See [Networking](networking.md).
 
+### `docker.nix` — local image builds
+
+Docker as a **build tool only** — some k8s workloads need images upstream
+doesn't publish in a usable form (the [care](care.md) backend bakes plugins
+in at image build time; care_fe compiles the API URL into the bundle). The
+`care-images` justfile recipes `docker build` them on the box and import the
+result straight into k3s's containerd (`k3s ctr images import`) — no registry,
+same idea as the Nix-built bingo image. Weekly `autoPrune` keeps build-cache
+layers from eating the pool. Nothing runs under docker; workloads live in k3s.
+
 ### `esphome.nix` — host-side ESPHome networking
 
 The ESPHome dashboard runs in k3s with `hostNetwork` ([ESPHome](esphome.md));

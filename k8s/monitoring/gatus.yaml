@@ -150,6 +150,107 @@ data:
         alerts:
           - type: ntfy
 
+      # --- ohcnetwork/care (k8s/care + k8s/care-teleicu) ----------------------
+      # Public hosts get edge-path probes with TLS-expiry checks; components
+      # without a public health surface are probed via in-cluster Services.
+
+      # care backend API — its own ping endpoint, through the full public
+      # path (edge -> tunnel -> Traefik -> gunicorn).
+      - name: care-api
+        group: ohcnetwork/care
+        url: "https://care-api.rithviknishad.dev/ping/"
+        interval: 5m
+        conditions:
+          - "[STATUS] == 200"
+          - "[CERTIFICATE_EXPIRATION] > 240h"
+        alerts:
+          - type: ntfy
+
+      # care_fe SPA — nginx serving the bundle.
+      - name: care-fe
+        group: ohcnetwork/care
+        url: "https://care.rithviknishad.dev/"
+        interval: 5m
+        conditions:
+          - "[STATUS] == 200"
+          - "[CERTIFICATE_EXPIRATION] > 240h"
+        alerts:
+          - type: ntfy
+
+      # MinIO — probed in-cluster (the public host only answers presigned
+      # URLs meaningfully; the health endpoint is cleaner via the Service).
+      - name: minio
+        group: ohcnetwork/care
+        url: "http://minio.care.svc:9000/minio/health/live"
+        interval: 1m
+        conditions:
+          - "[STATUS] == 200"
+        alerts:
+          - type: ntfy
+
+      # TeleICU gateway middleware (daphne) — in-cluster; / serves the
+      # gateway status page. The public host is covered by the nginx probe
+      # below.
+      - name: teleicu-middleware
+        group: ohcnetwork/care
+        url: "http://teleicu-middleware.care-teleicu.svc:8090/"
+        interval: 1m
+        conditions:
+          - "[STATUS] == 200"
+        alerts:
+          - type: ntfy
+
+      # TeleICU gateway public edge — / is proxied by the upstream nginx to
+      # the middleware's status page, so this measures the full
+      # edge->tunnel->nginx->daphne path (+ cert).
+      - name: teleicu-gateway-edge
+        group: ohcnetwork/care
+        url: "https://care-teleicu-gateway.rithviknishad.dev/"
+        interval: 5m
+        conditions:
+          - "[STATUS] == 200"
+          - "[CERTIFICATE_EXPIRATION] > 240h"
+        alerts:
+          - type: ntfy
+
+      # Devices micro-frontend — upstream nginx.conf serves /health.
+      - name: teleicu-devices-fe
+        group: ohcnetwork/care
+        url: "https://care-teleicu-devices.rithviknishad.dev/health"
+        interval: 5m
+        conditions:
+          - "[STATUS] == 200"
+          - "[CERTIFICATE_EXPIRATION] > 240h"
+        alerts:
+          - type: ntfy
+
+      # RTSPtoWeb stream server — in-cluster; any HTTP answer proves the
+      # process is up (its UI may 401 depending on config).
+      - name: teleicu-stream-server
+        group: ohcnetwork/care
+        url: "http://stream-server.care-teleicu.svc:8080/"
+        interval: 1m
+        conditions:
+          - "[CONNECTED] == true"
+          - "[STATUS] < 500"
+        alerts:
+          - type: ntfy
+
+      # Mock PTZ camera (test fixture) — the web UI answers 401 without
+      # camera credentials, which still proves the ONVIF/RTSP sim is alive,
+      # so assert reachable + non-5xx. The mock vitals devices are
+      # outbound-only (no port to probe); their failures surface as missing
+      # observations instead.
+      - name: mock-ptz-camera
+        group: ohcnetwork/care
+        url: "http://mock-ptz-camera.care-teleicu.svc:8080/"
+        interval: 5m
+        conditions:
+          - "[CONNECTED] == true"
+          - "[STATUS] < 500"
+        alerts:
+          - type: ntfy
+
       # --- ABDM sandbox (third-party, not ours) ------------------------------
       # External ABDM APIs we don't control. "Up" = the host is REACHABLE and
       # not returning a server error: [CONNECTED] guards the unreachable case
@@ -238,7 +339,7 @@ spec:
         app.kubernetes.io/name: gatus
       annotations:
         # Bump to roll the pod when the config changes.
-        checksum/config: config-v10
+        checksum/config: config-v12
     spec:
       securityContext:
         runAsNonRoot: true

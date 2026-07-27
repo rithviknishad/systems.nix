@@ -17,6 +17,7 @@
     ../../modules/k3s.nix
     ../../modules/monitoring.nix
     ../../modules/cloudflared.nix
+    ../../modules/docker.nix
     ../../modules/esphome.nix
     ../../modules/bingo.nix
     ../../users/rithviknishad.nix

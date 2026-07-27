@@ -35,6 +35,8 @@ you) holds a key that can open them.
 | `secrets/ssh_id_ed25519` | admin + avocado | user's SSH private key (binary) |
 | `secrets/cloudflared_credentials.json` | admin + avocado | tunnel credentials (binary) |
 | `secrets/monitoring.enc.yaml` | admin + avocado | Grafana admin password, ntfy token |
+| `secrets/care.enc.yaml` | admin + avocado | CARE k8s Secret: Django key, JWKS, Postgres + MinIO credentials |
+| `secrets/care-teleicu.enc.yaml` | admin + avocado | TeleICU gateway k8s Secret: Django key, gateway JWKS, Postgres + S3 credentials |
 
 ## How the box consumes secrets
 

@@ -158,6 +158,7 @@ group (`ui.default-sort-by: group`):
 |---|---|---|---|
 | `internal` | Grafana / VMSingle / VictoriaLogs `/health`, ESPHome `/` | `[STATUS] == 200` | `avocado-alerts` |
 | `public` | `rithviknishad.dev`, `photos.rithviknishad.dev` (Immich `/api/server/ping`) | 200 + body + TLS-expiry | `avocado-alerts` |
+| `ohcnetwork/care` | CARE public edges (`care-api /ping/`, SPA, gateway `/`, MFE `/health`) + in-cluster (MinIO, middleware, RTSPtoWeb, mock camera) | 200 (+ TLS-expiry on public) | `avocado-alerts` |
 | `ABDM-SBX` | ABDM **sandbox**: NHPR (`/v4/`) / ABHA / HIECM | reachable + non-5xx | `avocado-abdm` (prio 4) |
 | `ABDM-LIVE` | ABDM **live**: NHPR (`/v4/`) / ABHA / HIECM | reachable + non-5xx | `avocado-abdm` (prio 5) |
 
@@ -178,7 +179,7 @@ Two independent pipelines push to ntfy across two topics:
 
 | Topic | Fed by |
 |---|---|
-| `avocado-alerts` | Alertmanager bridge + Gatus `internal`/`public` groups |
+| `avocado-alerts` | Alertmanager bridge + Gatus `internal`/`public`/`ohcnetwork/care` groups |
 | `avocado-abdm` | Gatus `ABDM-SBX`/`ABDM-LIVE` groups (third-party, kept separate) |
 
 > Topic names are set in `ntfy-alertmanager.yaml` and `gatus.yaml` (top-level

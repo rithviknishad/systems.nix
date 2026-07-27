@@ -1,0 +1,51 @@
+# Nightly logical backups of the TeleICU gateway Postgres DB — same pattern
+# and caveats as k8s/care/backup.yaml (app-level safety net, NOT disaster
+# recovery: the PVC sits on the same non-redundant striped pool; offsite copy
+# planned separately — see docs/care.md "Backups").
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: teleicu-db-backups
+  namespace: care-teleicu
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: teleicu-db-backup
+  namespace: care-teleicu
+spec:
+  # Offset from the care DB backup (02:30) to avoid two dump pods at once.
+  schedule: "45 2 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: pg-dump
+              image: postgres:17-alpine
+              envFrom:
+                - secretRef: { name: teleicu-secret }
+              command:
+                - sh
+                - -c
+                - |
+                  set -eu
+                  pg_dump "$DATABASE_URL" -Fc -f "/backups/teleicu-$(date +%F).dump"
+                  find /backups -name 'teleicu-*.dump' -mtime +14 -delete
+                  ls -lh /backups
+              volumeMounts:
+                - name: backups
+                  mountPath: /backups
+          volumes:
+            - name: backups
+              persistentVolumeClaim: { claimName: teleicu-db-backups }

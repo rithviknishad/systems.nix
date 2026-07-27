@@ -1,0 +1,56 @@
+# Nightly logical backups of the care Postgres DB.
+#
+# pg_dump (custom format, compressed) into a dedicated PVC, keeping 14 days.
+# This protects against app-level disasters (bad migration, fat-fingered
+# delete) which ZFS-level redundancy or snapshots would faithfully preserve.
+# >>> The PVC lives on the SAME striped, non-redundant rpool as the database
+#     itself, so this is NOT disaster recovery — an offsite copy is planned
+#     separately (see docs/care.md "Backups", which also has restore steps).
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: care-db-backups
+  namespace: care
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: care-db-backup
+  namespace: care
+spec:
+  schedule: "30 2 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: pg-dump
+              image: postgres:17-alpine
+              envFrom:
+                - secretRef: { name: care-secret }
+              command:
+                - sh
+                - -c
+                # -Fc: custom format (compressed, pg_restore-able with
+                # --clean). Prune to 14 daily dumps; care DBs are small.
+                - |
+                  set -eu
+                  pg_dump "$DATABASE_URL" -Fc -f "/backups/care-$(date +%F).dump"
+                  find /backups -name 'care-*.dump' -mtime +14 -delete
+                  ls -lh /backups
+              volumeMounts:
+                - name: backups
+                  mountPath: /backups
+          volumes:
+            - name: backups
+              persistentVolumeClaim: { claimName: care-db-backups }

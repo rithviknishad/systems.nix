@@ -229,3 +229,101 @@ bingo-logs:
 # real; this is just for debugging the build).
 bingo-image:
     nix build .#packages.x86_64-linux.bingo-image
+
+# --- CARE (Open Healthcare Network HMIS + TeleICU) ---------------------------
+# Two stacks: k8s/care (MinIO + Postgres + Redis + Django API/celery + SPA)
+# and k8s/care-teleicu (gateway middleware + RTSPtoWeb + devices MFE + mock
+# devices). Public hosts (flattened to one label — Cloudflare Universal SSL
+# only covers *.rithviknishad.dev):
+#   https://care.rithviknishad.dev                   SPA (care_fe)
+#   https://care-api.rithviknishad.dev               Django API
+#   https://care-s3.rithviknishad.dev                MinIO (presigned URLs)
+#   https://care-teleicu-gateway.rithviknishad.dev   TeleICU gateway
+#   https://care-teleicu-devices.rithviknishad.dev   devices micro-frontend
+# Custom images are built ON the box with docker (modules/docker.nix) and
+# imported straight into k3s's containerd — no registry. See docs/care.md.
+
+care_build := ".build"
+
+# Build + import the custom core images. care-backend:local bakes the TeleICU
+# plugs in at build time (upstream pip-installs ADDITIONAL_PLUGS in the
+# Dockerfile); care-fe:local compiles the API URL into the bundle (.env.local
+# beats the repo's .env for Vite). Import goes through root ssh (same
+# passwordless path as `just deploy`) because k3s ctr needs root.
+care-images ref="develop":
+    rm -rf {{care_build}}/care {{care_build}}/care_fe
+    mkdir -p {{care_build}}
+    git clone --depth 1 --branch {{ref}} https://github.com/ohcnetwork/care {{care_build}}/care
+    docker build -t care-backend:local \
+        --build-arg ADDITIONAL_PLUGS="$(cat k8s/care/additional-plugs.json)" \
+        -f {{care_build}}/care/docker/prod.Dockerfile {{care_build}}/care
+    git clone --depth 1 --branch {{ref}} https://github.com/ohcnetwork/care_fe {{care_build}}/care_fe
+    printf 'REACT_CARE_API_URL=https://care-api.rithviknishad.dev\n' > {{care_build}}/care_fe/.env.local
+    docker build -t care-fe:local {{care_build}}/care_fe
+    docker save care-backend:local care-fe:local | ssh {{NIX_SSHOPTS}} {{target}} 'k3s ctr images import -'
+
+# Build + import the TeleICU custom images (devices MFE + mock PTZ camera).
+# The gateway itself uses published ghcr.io/10bedicu images — no build needed.
+care-teleicu-images:
+    rm -rf {{care_build}}/care_teleicu_devices_fe {{care_build}}/mock-ptz-camera
+    mkdir -p {{care_build}}
+    git clone --depth 1 https://github.com/10bedicu/care_teleicu_devices_fe {{care_build}}/care_teleicu_devices_fe
+    docker build -t care-teleicu-devices-fe:local {{care_build}}/care_teleicu_devices_fe
+    git clone --depth 1 https://github.com/10bedicu/mock-ptz-camera {{care_build}}/mock-ptz-camera
+    docker build -t mock-ptz-camera:local {{care_build}}/mock-ptz-camera
+    docker save care-teleicu-devices-fe:local mock-ptz-camera:local | ssh {{NIX_SSHOPTS}} {{target}} 'k3s ctr images import -'
+
+# Deploy/upgrade the core care stack: manifests via kustomize, then the
+# sops-encrypted Secret piped straight into kubectl (plaintext never touches
+# disk). Secret changes need a rollout restart of the consumers to be seen.
+care-deploy:
+    KUBECONFIG={{kubeconfig_path}} kubectl apply -k k8s/care
+    sops --decrypt secrets/care.enc.yaml \
+        | KUBECONFIG={{kubeconfig_path}} kubectl apply -f -
+
+# Deploy/upgrade the TeleICU stack (same pattern as care-deploy).
+care-teleicu-deploy:
+    KUBECONFIG={{kubeconfig_path}} kubectl apply -k k8s/care-teleicu
+    sops --decrypt secrets/care-teleicu.enc.yaml \
+        | KUBECONFIG={{kubeconfig_path}} kubectl apply -f -
+
+# Show the state of both care namespaces.
+care-status:
+    KUBECONFIG={{kubeconfig_path}} kubectl -n care get pods,svc,ingress,pvc,jobs,cronjobs
+    KUBECONFIG={{kubeconfig_path}} kubectl -n care-teleicu get pods,svc,ingress,pvc,cronjobs
+
+# Tail a care component's logs (care-backend, care-celery-worker,
+# care-celery-beat, care-fe, postgres, redis, minio).
+care-logs component="care-backend":
+    KUBECONFIG={{kubeconfig_path}} kubectl -n care logs -f deploy/{{component}}
+
+# Tail a TeleICU component's logs (teleicu-middleware, teleicu-celery,
+# stream-server, reverse-proxy, teleicu-devices-fe, mock-ptz-camera,
+# mock-vitals-hl7, mock-vitals-ventilator, postgres, redis).
+care-teleicu-logs component="teleicu-middleware":
+    KUBECONFIG={{kubeconfig_path}} kubectl -n care-teleicu logs -f deploy/{{component}}
+
+# Run a manage.py command in the care backend (e.g. `just care-manage
+# createsuperuser`, `just care-manage load_fixtures`).
+care-manage *args:
+    KUBECONFIG={{kubeconfig_path}} kubectl -n care exec -it deploy/care-backend -- python manage.py {{args}}
+
+# Edit the sops-encrypted care secret (see k8s/care/secret.example.yaml).
+care-secrets:
+    sops secrets/care.enc.yaml
+
+care-secrets-rekey:
+    sops updatekeys secrets/care.enc.yaml
+
+# Edit the sops-encrypted TeleICU secret (see k8s/care-teleicu/secret.example.yaml).
+care-teleicu-secrets:
+    sops secrets/care-teleicu.enc.yaml
+
+care-teleicu-secrets-rekey:
+    sops updatekeys secrets/care-teleicu.enc.yaml
+
+# One-time: point the five public care hostnames at the tunnel. Needs the
+# cloudflared login cert (cloudflared tunnel login) on this machine.
+care-dns:
+    for h in care care-api care-s3 care-teleicu-gateway care-teleicu-devices; do \
+        cloudflared tunnel route dns avocado "$h.rithviknishad.dev"; done

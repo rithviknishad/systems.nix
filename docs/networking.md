@@ -67,6 +67,7 @@ flowchart LR
             esphome[esphome]
             ledger[formance console]
             bingo[bingo]
+            care[care + teleicu]
         end
     end
 
@@ -79,6 +80,7 @@ flowchart LR
     traefik -->|esphome.rithviknishad.dev| esphome
     traefik -->|ledger.rithviknishad.dev| ledger
     traefik -->|bingo.rithviknishad.dev| bingo
+    traefik -->|care*.rithviknishad.dev x5| care
 ```
 
 ### Public routing table
@@ -96,6 +98,11 @@ matched returns `http_status:404`.
 | `esphome.rithviknishad.dev` | ESPHome `esphome` | [ESPHome](esphome.md) |
 | `ledger.rithviknishad.dev` | Formance `console` | [Formance Ledger](formance.md) |
 | `bingo.rithviknishad.dev` | Bingo `bingo` | [Kubernetes](kubernetes.md) |
+| `care.rithviknishad.dev` | CARE `care-fe` | [CARE](care.md) |
+| `care-api.rithviknishad.dev` | CARE `care-backend` | [CARE](care.md) |
+| `care-s3.rithviknishad.dev` | CARE `minio` (presigned URLs) | [CARE](care.md) |
+| `care-teleicu-gateway.rithviknishad.dev` | TeleICU `reverse-proxy` | [CARE](care.md) |
+| `care-teleicu-devices.rithviknishad.dev` | TeleICU `teleicu-devices-fe` | [CARE](care.md) |
 
 Notes:
 

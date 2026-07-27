@@ -170,6 +170,19 @@ kubectl -n bingo rollout restart deploy/bingo
 The image reaches the box through the normal `just deploy` (k3s preloads it via
 `services.k3s.images`) — `just bingo-deploy` only applies the manifests.
 
+### CARE HMIS + TeleICU — `k8s/care/` + `k8s/care-teleicu/`
+
+[Open Healthcare Network](https://ohc.network) CARE (Django API + React SPA +
+MinIO object storage) plus the 10bedicu TeleICU layer (gateway middleware,
+RTSPtoWeb stream server, devices micro-frontend, mock ONVIF camera + vitals
+devices). Deployed with kustomize + sops secrets (`just care-deploy`,
+`just care-teleicu-deploy`); public at `https://care.rithviknishad.dev` (+ 4
+sibling hosts). Four images are **built on the box with docker**
+(`just care-images`, `just care-teleicu-images`) and imported into k3s's
+containerd — upstream either publishes no image or bakes config/plugins in at
+build time. Nightly `pg_dump` CronJobs back up both databases. Documented on
+its own [CARE](care.md) page.
+
 ## The monitoring workload
 
 The largest thing on the cluster is the observability stack under

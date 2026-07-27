@@ -1,0 +1,17 @@
+[
+  {
+    "name": "gateway_device",
+    "package_name": "git+https://github.com/10bedicu/care_teleicu_devices.git",
+    "version": "@main"
+  },
+  {
+    "name": "camera_device",
+    "package_name": "git+https://github.com/10bedicu/care_teleicu_devices.git",
+    "version": "@main"
+  },
+  {
+    "name": "vitals_observation_device",
+    "package_name": "git+https://github.com/10bedicu/care_teleicu_devices.git",
+    "version": "@main"
+  }
+]

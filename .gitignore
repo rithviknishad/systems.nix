@@ -20,3 +20,7 @@ docs/_site/
 docs/.jekyll-cache/
 docs/.jekyll-metadata
 docs/vendor/
+
+# Scratch dir for `just care-images` — shallow clones of upstream repos used
+# only as docker build contexts. Never source of truth, always recreatable.
+.build/

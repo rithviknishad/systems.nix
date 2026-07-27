@@ -52,3 +52,19 @@ creation_rules:
       - age:
           - *admin
           - *avocado
+
+  # CARE k8s Secrets (Django keys, JWKS, Postgres + MinIO credentials): one
+  # for the core stack (k8s/care), one for the TeleICU gateway stack
+  # (k8s/care-teleicu). Full k8s Secret manifests, decrypted at deploy time
+  # (`just care-deploy` / `just care-teleicu-deploy`); encrypted to avocado
+  # too for consistency.
+  - path_regex: secrets/care\.enc\.yaml$
+    key_groups:
+      - age:
+          - *admin
+          - *avocado
+  - path_regex: secrets/care-teleicu\.enc\.yaml$
+    key_groups:
+      - age:
+          - *admin
+          - *avocado
