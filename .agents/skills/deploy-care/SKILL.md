@@ -215,18 +215,83 @@ Local Body Type, Grama Panchayat, Ward Number, Ward Name. Do NOT run
 `load_fixtures` on a production instance (it seeds demo patients and weak
 accounts).
 
-## Step 7 — Post-deploy manual wiring (TeleICU, one-time, in the CARE UI)
+## Step 7 — Post-deploy wiring (TeleICU, one-time)
 
-Guide the user through it:
-1. Admin → Apps → *CARE TeleICU Devices* → set the remote URL to the devices
-   MFE host.
-2. Create a facility, then a **Gateway device** pointing at the gateway host.
-3. Copy the gateway device's ID into the gateway's `GATEWAY_DEVICE_ID` env and
-   restart the middleware (this also enables automated vitals observations).
-4. Add a **Camera device** (for the mock camera, use its internal ONVIF
-   address, port 8080, creds `admin`/`admin`) and a **Vitals observation
-   device** for the mock HL7 monitor. Onboarding is always by explicit address
-   (WS-Discovery multicast usually doesn't cross container networks).
+1. **Register the devices MFE** — this is a plain API call, not a UI chore, so
+   do it yourself rather than walking the user through clicks. CARE exposes a
+   `plug_config` endpoint the SPA reads on load to pull micro-frontend
+   remotes:
+   - `GET /api/v1/plug_config/` — public, returns `{"configs": [...]}`.
+   - `POST /api/v1/plug_config/` (create) / `PUT /api/v1/plug_config/<slug>/`
+     (update) — require an **admin (`is_staff`) JWT** (obtain via
+     `POST /api/v1/auth/login/`, use the `access` token as
+     `Authorization: Bearer`).
+   The record is `{ "slug": "...", "meta": { ... } }` (model: `slug` unique +
+   `meta` JSON). For the TeleICU devices MFE:
+   ```json
+   {
+     "slug": "teleicu-devices",
+     "meta": {
+       "url": "<devices-MFE-host>/assets/remoteEntry.js",
+       "name": "CARE TeleICU Devices",
+       "plug": "teleicu-devices"
+     }
+   }
+   ```
+   Confirm the exact `remoteEntry.js` path against the deployed MFE first
+   (module-federation Vite builds usually emit `/assets/remoteEntry.js`; a
+   bare `/remoteEntry.js` often 404s). Make the call idempotent (PUT if the
+   slug already exists, else POST) and verify via the public `GET`. The MFE's
+   nginx already serves `Access-Control-Allow-Origin: *`, so the cross-origin
+   remote load works. If the environment provides admin creds only via the
+   demo `admin`/`admin` from `load_fixtures`, use them but flag that they must
+   be rotated. (The older Admin → Apps UI flow does the same thing; prefer the
+   API so the step is scriptable/repeatable.)
+2. **Create a facility, then a Gateway device** — also API-drivable, so do it
+   yourself. The gateway device is `POST
+   /api/v1/facility/<facility_id>/device/` (admin token) with
+   `care_type: "gateway"`, `status`/`availability_status` active/available,
+   and `endpoint_address` (+ `insecure`) set to the gateway host — CARE nests
+   these under `care_metadata` in the response. Grab the response's **`id`**
+   (a UUID): that is the gateway device ID. (A facility likewise has a create
+   API; `load_fixtures` also seeds one you can reuse.)
+3. Put that `id` into the gateway's `GATEWAY_DEVICE_ID` env and restart the
+   middleware (this also enables automated vitals observations). The
+   middleware signs JWTs with its JWKS and sends the ID as `X-Gateway-Id` on
+   its CARE calls; CARE matches it to the registered device to authorize.
+4. **Add a Camera device (ONVIF).** A camera device is only useful once it has
+   a **`stream_id`** — a stream registered in the RTSP-to-web server
+   (RTSPtoWeb). The gateway does NOT produce this: its camera API only does
+   PTZ/status, and nothing syncs CARE cameras back into RTSPtoWeb. So onboard
+   in two steps:
+   1. **Register the RTSP feed → stream_id.** ONVIF is the only reliable way to
+      get the camera's RTSP URL (the path is vendor-specific — never guess it).
+      Call ONVIF `GetStreamUri` (from a component that has an ONVIF client —
+      the gateway image ships `onvif-zeep`), bake URL-encoded credentials into
+      the returned RTSP URL, and register it with RTSPtoWeb
+      (`POST /stream/<id>/add`, or `/edit` if the id already exists). Pick the
+      `stream_id` yourself (a UUID). On this repo that whole flow is
+      `just care-register-camera <ip> <user> <pass> [profile] [onvif_port] [stream_id]`
+      (`k8s/care-teleicu/scripts/register-camera-stream.py`), which prints the
+      id.
+   2. **Create the device** — `POST /api/v1/facility/<facility_id>/device/`
+      (admin token) with `care_type: "camera"`, `type: "ONVIF"`, the `gateway`
+      device id, the camera's `endpoint_address`/`username`/`password`, and the
+      `stream_id` from step 1. Response `id` is the camera device id.
+
+   Also add a **Vitals observation device** for the mock HL7 monitor.
+   Onboarding is always by explicit address (WS-Discovery multicast usually
+   doesn't cross container networks). For the mock PTZ camera use its internal
+   ONVIF address on port 8080, creds `admin`/`admin`.
+
+   **When a user asks to set up an ONVIF camera, first ask for its IP address
+   and credentials if they weren't provided** — you need them for both the ONVIF
+   GetStreamUri and the device payload.
+
+   **Streams are runtime-only:** RTSPtoWeb holds them in memory/emptyDir and
+   nothing re-registers them, so a stream-server restart drops every camera
+   feed. Restore by re-running the registration with the device's **existing**
+   `stream_id` (make the register step idempotent so the id is reused).
 
 ## Gotchas (CARE-level — hold on any platform)
 
@@ -240,8 +305,15 @@ Guide the user through it:
 - **TeleICU gateway nginx hardcodes upstream hostnames** — the middleware and
   stream-server services MUST be named `teleicu-middleware` and
   `stream-server`. Its `/test` path may 404 in the published image; probe `/`.
+- **Devices MFE `remoteEntry.js` path** — confirm it against the deployed MFE
+  before registering the plug; module-federation Vite builds emit
+  `/assets/remoteEntry.js`, and a bare `/remoteEntry.js` typically 404s.
 - **Mock PTZ camera** answers 401 on `/` without creds (still proves it's
   alive) — assert reachable + non-5xx, not strictly 200.
+- **Camera streams are runtime-only.** RTSPtoWeb keeps registered streams in
+  memory/emptyDir and nothing re-registers them, so a stream-server restart
+  silently breaks every camera feed. Re-register with each device's existing
+  `stream_id` after a restart; don't rely on the gateway to do it.
 - **Mock ventilator** may crash-loop: current gateway images' pydantic
   Observation enum rejects ventilator metrics (PEEP…). Park it disabled; the
   HL7 monitor mock covers the vitals flow.

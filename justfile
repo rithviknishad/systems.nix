@@ -308,6 +308,43 @@ care-teleicu-logs component="teleicu-middleware":
 care-manage *args:
     KUBECONFIG={{kubeconfig_path}} kubectl -n care exec -it deploy/care-backend -- python manage.py {{args}}
 
+# Register (or update) the TeleICU devices micro-frontend as a CARE plug via
+# the plug_config API, so the SPA loads its remoteEntry.js on next load. No
+# UI clicks needed. Idempotent (PUT if it already exists, else POST). Needs an
+# admin (is_staff) login — defaults to the load_fixtures admin/admin, so pass
+# real creds on a hardened instance: `just care-register-mfe myadmin 's3cr3t'`.
+care-register-mfe user="admin" pass="admin":
+    #!/usr/bin/env sh
+    set -eu
+    api=https://care-api.rithviknishad.dev
+    mfe=https://care-teleicu-devices.rithviknishad.dev
+    token=$(curl -fsS -X POST "$api/api/v1/auth/login/" -H 'Content-Type: application/json' \
+        -d '{"username":"{{user}}","password":"{{pass}}"}' \
+        | python3 -c "import sys,json; print(json.load(sys.stdin)['access'])")
+    body='{"slug":"teleicu-devices","meta":{"url":"'"$mfe"'/assets/remoteEntry.js","name":"CARE TeleICU Devices","plug":"teleicu-devices"}}'
+    if curl -fsS "$api/api/v1/plug_config/" | grep -q '"teleicu-devices"'; then
+        curl -fsS -X PUT "$api/api/v1/plug_config/teleicu-devices/" -H "Authorization: Bearer $token" \
+            -H 'Content-Type: application/json' -d "$body" >/dev/null
+        echo "updated plug_config: teleicu-devices"
+    else
+        curl -fsS -X POST "$api/api/v1/plug_config/" -H "Authorization: Bearer $token" \
+            -H 'Content-Type: application/json' -d "$body" >/dev/null
+        echo "created plug_config: teleicu-devices"
+    fi
+
+# Register an ONVIF camera's RTSP feed with the in-cluster RTSPtoWeb and print
+# its stream_id — the value to put in the CARE camera device's `stream_id`
+# (the device itself is a separate POST /device/ call, see docs/care.md).
+# Runs scripts/register-camera-stream.py inside the middleware pod (has
+# onvif-zeep). onvif_port is 80 for real cameras, 8080 for the mock. Pass a
+# stream_id as the last arg to re-register the SAME id after a stream-server
+# restart (streams are runtime-only — see docs/care.md):
+#   just care-register-camera 192.168.1.50 admin 's3cr3t'
+care-register-camera ip user pass profile="0" onvif_port="80" stream_id="":
+    KUBECONFIG={{kubeconfig_path}} kubectl -n care-teleicu exec -i deploy/teleicu-middleware -- \
+        python - '{{ip}}' '{{user}}' '{{pass}}' '{{profile}}' '{{onvif_port}}' '{{stream_id}}' \
+        < k8s/care-teleicu/scripts/register-camera-stream.py
+
 # Edit the sops-encrypted care secret (see k8s/care/secret.example.yaml).
 care-secrets:
     sops secrets/care.enc.yaml

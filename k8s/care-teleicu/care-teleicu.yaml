@@ -45,9 +45,11 @@ data:
   # secret; bucket created by the minio-buckets Job over there).
   S3_ENDPOINT_URL: http://minio.care.svc.cluster.local:9000
   S3_BUCKET_NAME: teleicu-gateway
-  # Filled in AFTER registering the gateway device in the CARE UI (its ID is
-  # only known then) — see docs/care.md; restart the middleware after editing.
-  GATEWAY_DEVICE_ID: ""
+  # The gateway device's CARE id (from POST .../device/, care_type=gateway).
+  # Set after registering the device; enables automated vitals observations
+  # and is sent as X-Gateway-Id when the middleware calls CARE. Restart the
+  # middleware after changing this.
+  GATEWAY_DEVICE_ID: "56fed713-0815-4c38-99fc-ec15c4f09944"
 ---
 # --- Postgres -----------------------------------------------------------------
 apiVersion: v1
@@ -203,8 +205,10 @@ spec:
 # Config template lives in the ConfigMap; an initContainer copies it to an
 # emptyDir because RTSPtoWeb wants to WRITE the config back when streams are
 # (de)registered via its API — a read-only ConfigMap mount would break that.
-# Streams are runtime state (re-registered by the gateway), so losing them on
-# pod restart is fine.
+# Streams are runtime state and are NOT auto re-registered (the gateway only
+# mints playback tokens + does PTZ; nothing syncs CARE cameras back into
+# RTSPtoWeb), so a pod restart drops them — re-run `just care-register-camera`
+# with the device's existing stream_id to restore playback. See docs/care.md.
 apiVersion: v1
 kind: ConfigMap
 metadata:

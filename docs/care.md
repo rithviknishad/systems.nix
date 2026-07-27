@@ -81,6 +81,9 @@ flowchart TB
 - **RTSPtoWeb** verifies per-stream tokens against the middleware's
   `/verifyToken`; its config is seeded from a ConfigMap into an emptyDir
   (it wants to write stream state back, so a read-only mount would break it).
+  Camera streams are registered at **runtime** (via `just care-register-camera`
+  — see [below](#post-deploy-wiring-one-time)) and are **not** auto
+  re-registered, so a stream-server restart drops them.
 
 ## Custom images (built on the box, no registry)
 
@@ -117,6 +120,7 @@ just care-deploy            # namespace care: manifests + sops secret
 just care-teleicu-deploy    # namespace care-teleicu: manifests + sops secret
 just care-dns               # one-time: route the 5 hostnames to the tunnel
 just care-manage createsuperuser   # first admin account
+just care-register-mfe      # register the TeleICU devices MFE (plug_config API)
 ```
 
 Secrets follow the Formance pattern: a full k8s `Secret` manifest lives
@@ -125,24 +129,77 @@ into `kubectl apply` — plaintext never touches disk. The `secret.example.yaml`
 files document every key, including how to generate stable `JWKS_BASE64` key
 sets (care and the gateway each need their **own**).
 
-### Post-deploy manual wiring (one-time, in the CARE UI)
+### Post-deploy wiring (one-time)
 
-1. **Register the devices MFE**: Admin → Apps → *CARE TeleICU Devices* →
-   set the remote URL to `https://care-teleicu-devices.rithviknishad.dev`.
-   (The MFE's nginx already serves the required CORS headers.)
-2. **Create a facility**, then a **Gateway device** pointing at
-   `https://care-teleicu-gateway.rithviknishad.dev`.
-3. Copy the gateway device's ID into `GATEWAY_DEVICE_ID` in the `teleicu-env`
-   ConfigMap (`k8s/care-teleicu/care-teleicu.yaml`), redeploy, and restart
-   the middleware — this also enables automated vitals observations.
-4. **Add a Camera device** using the mock camera's in-cluster address
-   (`mock-ptz-camera.care-teleicu.svc.cluster.local`, ONVIF port `8080`,
-   user/pass `admin`/`admin`) and a **Vitals observation device** for the
-   mock HL7 monitor. WS-Discovery multicast doesn't cross the pod network,
-   so onboarding is always by explicit address — which is how CARE does it
-   anyway. (A ventilator mock Deployment also exists but is parked at
-   `replicas: 0`: the current gateway image's observation schema rejects
-   ventilator metrics like PEEP, so it can only crash-loop.)
+1. **Register the devices MFE** — done over the `plug_config` API, no UI
+   clicks:
+
+   ```sh
+   just care-register-mfe            # admin/admin (from load_fixtures); pass
+                                     # real creds on a hardened instance
+   ```
+
+   This upserts a `PlugConfig` (`POST`/`PUT /api/v1/plug_config/`, admin
+   token) with slug `teleicu-devices` and
+   `meta.url = https://care-teleicu-devices.rithviknishad.dev/assets/remoteEntry.js`.
+   The SPA reads the (public) plug list on load and pulls the remote; the
+   MFE's nginx already serves the required CORS headers. Verify with
+   `curl -s https://care-api.rithviknishad.dev/api/v1/plug_config/`.
+2. **Create a facility**, then a **Gateway device** — both drivable over the
+   API with an admin token. The gateway device is a `POST` to
+   `/api/v1/facility/<facility_id>/device/` with `care_type: gateway` and
+   `care_metadata.endpoint_address` set to the gateway host, e.g.:
+
+   ```sh
+   curl -X POST "https://care-api.rithviknishad.dev/api/v1/facility/<facility_id>/device/" \
+     -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+     -d '{"care_type":"gateway","status":"active","availability_status":"available",
+          "endpoint_address":"care-teleicu-gateway.rithviknishad.dev","insecure":false,
+          "registered_name":"TeleICU Gateway - avocado/linux",
+          "user_friendly_name":"Avocado Gateway"}'
+   ```
+
+   The response's `id` (a UUID) is the gateway device ID.
+3. Put that ID into `GATEWAY_DEVICE_ID` in the `teleicu-env` ConfigMap
+   (`k8s/care-teleicu/care-teleicu.yaml`), `just care-teleicu-deploy`, and
+   restart the middleware (`kubectl -n care-teleicu rollout restart
+   deploy/teleicu-middleware deploy/teleicu-celery`) — this also enables
+   automated vitals observations. The middleware then signs JWTs with its
+   JWKS and sends this ID as `X-Gateway-Id` on its CARE calls.
+4. **Add a Camera device (ONVIF).** A camera device needs a **`stream_id`** —
+   a stream registered in RTSPtoWeb — before it's useful, and the gateway
+   doesn't derive that for you (its camera API only does PTZ/status; nothing
+   syncs CARE cameras into RTSPtoWeb). So onboarding is two steps:
+
+   1. **Register the RTSP feed → get a stream_id.** ONVIF only exposes the
+      RTSP URL (vendor-specific — never guess the path), so
+      `just care-register-camera` asks the camera via ONVIF `GetStreamUri`
+      from inside the middleware pod, then registers the feed (creds baked
+      into the URL) with RTSPtoWeb and prints the id:
+
+      ```sh
+      # real camera: onvif_port 80 (default)
+      just care-register-camera 192.168.1.50 admin 's3cr3t'
+      # mock camera: in-cluster address, ONVIF on 8080
+      just care-register-camera mock-ptz-camera.care-teleicu.svc.cluster.local admin admin 0 8080
+      ```
+   2. **Create the device** — `POST /api/v1/facility/<facility_id>/device/`
+      (admin token) with `care_type: "camera"`, `type: "ONVIF"`, the
+      `gateway` device id, the camera's `endpoint_address`/`username`/
+      `password`, and the `stream_id` from step 1.
+
+   Also add a **Vitals observation device** for the mock HL7 monitor.
+   WS-Discovery multicast doesn't cross the pod network, so onboarding is
+   always by explicit address — which is how CARE does it anyway. (A
+   ventilator mock Deployment also exists but is parked at `replicas: 0`: the
+   current gateway image's observation schema rejects ventilator metrics like
+   PEEP, so it can only crash-loop.)
+
+   > **Streams are runtime-only.** RTSPtoWeb keeps registered streams in an
+   > emptyDir, and nothing re-registers them — a stream-server restart drops
+   > every camera feed. Restore playback by re-running the same command with
+   > the device's existing id as the last arg (idempotent, keeps the id):
+   > `just care-register-camera <ip> <user> <pass> 0 80 <stream_id>`.
 
 ## Object storage (MinIO)
 
