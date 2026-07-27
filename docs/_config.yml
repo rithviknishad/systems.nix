@@ -14,7 +14,13 @@ description: >-
   Home Manager, sops-nix, Tailscale, Cloudflare Tunnel, and a
   VictoriaMetrics monitoring stack.
 
-theme: just-the-docs
+# Use remote_theme instead of theme so the site builds correctly with both the
+# custom pages.yml GitHub Actions workflow (Jekyll 4.x via bundle) and the
+# automatic pages-build-deployment runner (github-pages gem / Jekyll 3.x Docker
+# container).  The github-pages gem whitelist does not include just-the-docs as
+# a local gem theme, but it does support any GitHub-hosted theme via
+# jekyll-remote-theme.
+remote_theme: just-the-docs/just-the-docs
 
 # Render ```mermaid fenced blocks as diagrams on the published site.
 mermaid:
@@ -35,4 +41,5 @@ back_to_top: true
 back_to_top_text: "Back to top"
 
 plugins:
+  - jekyll-remote-theme
   - jekyll-relative-links
