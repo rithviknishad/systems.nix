@@ -1,0 +1,87 @@
+# ONVIF Camera Testing Console (https://github.com/10bedicu/onvif-console) on k3s.
+#
+# A vendor-neutral ONVIF PTZ testing console: connect to a camera by IP, run
+# conformance/PTZ workflow tests, drive it manually, export a report. It's a
+# Next.js static UI served by a FastAPI sidecar that speaks ONVIF to the
+# camera (browsers can't — SOAP + WS-Security, no CORS on cameras).
+#
+# Deploy:   just onvif-console-images && just onvif-console-deploy
+# Image:    onvif-console:local — built on the box, imported into k3s (no
+#           registry), imagePullPolicy: Never (a missed import fails loudly).
+# Visit:    https://onvif-console.rithviknishad.dev
+#           (Cloudflare Tunnel — MUST be gated by Cloudflare Access: the
+#           console has NO auth of its own and relays camera credentials.)
+#
+# Networking: ordinary pod network. The console connects to cameras by the
+# explicit LAN IP typed into the UI, which pods reach via node SNAT (same path
+# the TeleICU middleware uses to reach 192.168.165.x). No hostNetwork/mDNS
+# needed — unlike esphome, discovery is by explicit address.
+#
+# Live video: go2rtc (WebRTC) is intentionally omitted — WebRTC media needs
+# direct UDP, which the cloudflared tunnel can't carry, so the console falls
+# back to ONVIF snapshot polling (~1 fps). The conformance/PTZ testing (the
+# point of the tool) is unaffected. See docs/onvif-console.md to add go2rtc.
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: onvif-console
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: onvif-console
+  namespace: onvif-console
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: onvif-console }
+  template:
+    metadata:
+      labels: { app: onvif-console }
+    spec:
+      containers:
+        - name: onvif-console
+          image: onvif-console:local
+          imagePullPolicy: Never
+          ports: [{ containerPort: 5800 }]
+          readinessProbe:
+            httpGet: { path: /, port: 5800 }
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /, port: 5800 }
+            periodSeconds: 30
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits: { memory: 512Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: onvif-console
+  namespace: onvif-console
+spec:
+  selector: { app: onvif-console }
+  ports: [{ port: 5800 }]
+---
+# Public path: cloudflared -> Traefik :80 -> this Ingress. Do NOT create the
+# tunnel DNS route for this host until the Cloudflare Access application
+# exists — otherwise the console (which relays camera credentials) is wide
+# open. See docs/onvif-console.md.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: onvif-console
+  namespace: onvif-console
+spec:
+  rules:
+    - host: onvif-console.rithviknishad.dev
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: onvif-console
+                port:
+                  number: 5800

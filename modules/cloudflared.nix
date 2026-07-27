@@ -64,6 +64,18 @@ in
         "care-s3.rithviknishad.dev" = "http://localhost:80";
         "care-teleicu-gateway.rithviknishad.dev" = "http://localhost:80";
         "care-teleicu-devices.rithviknishad.dev" = "http://localhost:80";
+        # Mock PTZ camera web UI (k8s/care-teleicu) — a throwaway ONVIF/RTSP
+        # simulator with baked-in admin/admin Basic auth. Public by choice for
+        # convenient demos; deliberately NOT Access-gated (unlike the sibling
+        # tools below) because it holds nothing sensitive and only ever serves
+        # a synthetic feed. See docs/care.md.
+        "mock-ptz-camera.rithviknishad.dev" = "http://localhost:80";
+        # ONVIF Camera Testing Console (k8s/onvif-console) — has NO auth of its
+        # own and relays camera credentials, so this host MUST be gated by
+        # Cloudflare Access. Create the Access app BEFORE `cloudflared tunnel
+        # route dns avocado onvif-console.rithviknishad.dev`. See
+        # docs/onvif-console.md.
+        "onvif-console.rithviknishad.dev" = "http://localhost:80";
       };
     };
   };

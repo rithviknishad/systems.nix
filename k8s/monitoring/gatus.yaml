@@ -126,6 +126,19 @@ data:
         alerts:
           - type: ntfy
 
+      # ONVIF Camera Testing Console (k8s/onvif-console) — probe the in-cluster
+      # Service; the FastAPI sidecar serves the static UI at / (200). The
+      # public host is Cloudflare Access-gated (a login 302 would mask a dead
+      # backend), so probe the Service, not the edge.
+      - name: onvif-console
+        group: internal
+        url: "http://onvif-console.onvif-console.svc:5800/"
+        interval: 1m
+        conditions:
+          - "[STATUS] == 200"
+        alerts:
+          - type: ntfy
+
       # --- Public endpoints (reachability + TLS expiry) ----------------------
       - name: rithviknishad.dev
         group: public
@@ -150,14 +163,14 @@ data:
         alerts:
           - type: ntfy
 
-      # --- ohcnetwork/care (k8s/care + k8s/care-teleicu) ----------------------
+      # --- ohcnetwork/care-avocado (k8s/care + k8s/care-teleicu) -------------
       # Public hosts get edge-path probes with TLS-expiry checks; components
       # without a public health surface are probed via in-cluster Services.
 
       # care backend API — its own ping endpoint, through the full public
       # path (edge -> tunnel -> Traefik -> gunicorn).
       - name: care-api
-        group: ohcnetwork/care
+        group: ohcnetwork/care-avocado
         url: "https://care-api.rithviknishad.dev/ping/"
         interval: 5m
         conditions:
@@ -168,7 +181,7 @@ data:
 
       # care_fe SPA — nginx serving the bundle.
       - name: care-fe
-        group: ohcnetwork/care
+        group: ohcnetwork/care-avocado
         url: "https://care.rithviknishad.dev/"
         interval: 5m
         conditions:
@@ -180,7 +193,7 @@ data:
       # MinIO — probed in-cluster (the public host only answers presigned
       # URLs meaningfully; the health endpoint is cleaner via the Service).
       - name: minio
-        group: ohcnetwork/care
+        group: ohcnetwork/care-avocado
         url: "http://minio.care.svc:9000/minio/health/live"
         interval: 1m
         conditions:
@@ -192,7 +205,7 @@ data:
       # gateway status page. The public host is covered by the nginx probe
       # below.
       - name: teleicu-middleware
-        group: ohcnetwork/care
+        group: ohcnetwork/care-avocado
         url: "http://teleicu-middleware.care-teleicu.svc:8090/"
         interval: 1m
         conditions:
@@ -204,7 +217,7 @@ data:
       # the middleware's status page, so this measures the full
       # edge->tunnel->nginx->daphne path (+ cert).
       - name: teleicu-gateway-edge
-        group: ohcnetwork/care
+        group: ohcnetwork/care-avocado
         url: "https://care-teleicu-gateway.rithviknishad.dev/"
         interval: 5m
         conditions:
@@ -215,7 +228,7 @@ data:
 
       # Devices micro-frontend — upstream nginx.conf serves /health.
       - name: teleicu-devices-fe
-        group: ohcnetwork/care
+        group: ohcnetwork/care-avocado
         url: "https://care-teleicu-devices.rithviknishad.dev/health"
         interval: 5m
         conditions:
@@ -227,7 +240,7 @@ data:
       # RTSPtoWeb stream server — in-cluster; any HTTP answer proves the
       # process is up (its UI may 401 depending on config).
       - name: teleicu-stream-server
-        group: ohcnetwork/care
+        group: ohcnetwork/care-avocado
         url: "http://stream-server.care-teleicu.svc:8080/"
         interval: 1m
         conditions:
@@ -236,18 +249,60 @@ data:
         alerts:
           - type: ntfy
 
+      # --- ohcnetwork/teleicu/cameras (own subgroup: cameras are numerous,
+      # site-specific, and physically fragile — kept out of the main
+      # ohcnetwork/care rollup so camera flakiness doesn't dilute it). ------
+
       # Mock PTZ camera (test fixture) — the web UI answers 401 without
       # camera credentials, which still proves the ONVIF/RTSP sim is alive,
       # so assert reachable + non-5xx. The mock vitals devices are
       # outbound-only (no port to probe); their failures surface as missing
       # observations instead.
       - name: mock-ptz-camera
-        group: ohcnetwork/care
+        group: ohcnetwork/teleicu/cameras
         url: "http://mock-ptz-camera.care-teleicu.svc:8080/"
         interval: 5m
         conditions:
           - "[CONNECTED] == true"
           - "[STATUS] < 500"
+        alerts:
+          - type: ntfy
+
+      # Mock PTZ camera public edge — same UI exposed at the tunnel host
+      # (admin/admin, no Access gate). 401 without creds still proves the
+      # full edge->tunnel->Traefik->pod path is alive; + cert expiry.
+      - name: mock-ptz-camera.rithviknishad.dev
+        group: ohcnetwork/teleicu/cameras
+        url: "https://mock-ptz-camera.rithviknishad.dev/"
+        interval: 5m
+        conditions:
+          - "[CONNECTED] == true"
+          - "[STATUS] < 500"
+          - "[CERTIFICATE_EXPIRATION] > 240h"
+        alerts:
+          - type: ntfy
+
+      # Physical TeleICU cameras (CARE camera devices) — a raw TCP connect to
+      # the RTSP port (554) is the health signal that matters: if the camera
+      # loses power/network the feed is dead, and nothing downstream (RTSPtoWeb
+      # on_demand + token auth) is probeable without a live viewer. In-cluster
+      # egress reaches these LAN IPs via node SNAT. Names match the CARE
+      # devices; add one line per camera you onboard.
+      - name: matrix-cctv
+        group: ohcnetwork/teleicu/cameras
+        url: "tcp://192.168.165.126:554"
+        interval: 5m
+        conditions:
+          - "[CONNECTED] == true"
+        alerts:
+          - type: ntfy
+
+      - name: prama-cctv
+        group: ohcnetwork/teleicu/cameras
+        url: "tcp://192.168.165.121:554"
+        interval: 5m
+        conditions:
+          - "[CONNECTED] == true"
         alerts:
           - type: ntfy
 
@@ -339,7 +394,7 @@ spec:
         app.kubernetes.io/name: gatus
       annotations:
         # Bump to roll the pod when the config changes.
-        checksum/config: config-v12
+        checksum/config: config-v17
     spec:
       securityContext:
         runAsNonRoot: true

@@ -103,6 +103,7 @@ matched returns `http_status:404`.
 | `care-s3.rithviknishad.dev` | CARE `minio` (presigned URLs) | [CARE](care.md) |
 | `care-teleicu-gateway.rithviknishad.dev` | TeleICU `reverse-proxy` | [CARE](care.md) |
 | `care-teleicu-devices.rithviknishad.dev` | TeleICU `teleicu-devices-fe` | [CARE](care.md) |
+| `mock-ptz-camera.rithviknishad.dev` | TeleICU `mock-ptz-camera` (mock UI, `admin`/`admin`) | [CARE](care.md) |
 
 Notes:
 

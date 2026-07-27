@@ -240,6 +240,7 @@ bingo-image:
 #   https://care-s3.rithviknishad.dev                MinIO (presigned URLs)
 #   https://care-teleicu-gateway.rithviknishad.dev   TeleICU gateway
 #   https://care-teleicu-devices.rithviknishad.dev   devices micro-frontend
+#   https://mock-ptz-camera.rithviknishad.dev        mock camera web UI (admin/admin)
 # Custom images are built ON the box with docker (modules/docker.nix) and
 # imported straight into k3s's containerd — no registry. See docs/care.md.
 
@@ -359,8 +360,44 @@ care-teleicu-secrets:
 care-teleicu-secrets-rekey:
     sops updatekeys secrets/care-teleicu.enc.yaml
 
-# One-time: point the five public care hostnames at the tunnel. Needs the
+# One-time: point the public care hostnames at the tunnel. Needs the
 # cloudflared login cert (cloudflared tunnel login) on this machine.
 care-dns:
-    for h in care care-api care-s3 care-teleicu-gateway care-teleicu-devices; do \
+    for h in care care-api care-s3 care-teleicu-gateway care-teleicu-devices mock-ptz-camera; do \
         cloudflared tunnel route dns avocado "$h.rithviknishad.dev"; done
+
+# --- ONVIF Camera Testing Console (10bedicu/onvif-console) --------------------
+# Vendor-neutral ONVIF PTZ testing console (k8s/onvif-console). Public host is
+# Access-gated (no auth of its own; relays camera credentials). See
+# docs/onvif-console.md.
+
+# Build + import the console image (Next UI + FastAPI sidecar, one image).
+# Same no-registry pattern as care-images: docker build on the box, then pipe
+# `docker save` into k3s's containerd over root ssh.
+#
+# The `packageManager` pin is load-bearing: upstream's package.json has no pin,
+# so corepack pulls the latest pnpm (11.x), which makes an *ignored build
+# script* (sharp) a FATAL error and breaks the Dockerfile's `pnpm install`.
+# pnpm 9 only warns, and reads the repo's lockfileVersion 9.0 natively. The
+# Dockerfile copies only package.json + the lockfile before install, so the pin
+# has to live in package.json (a pnpm-workspace.yaml would not be copied).
+onvif-console-images ref="main":
+    rm -rf {{care_build}}/onvif-console
+    mkdir -p {{care_build}}
+    git clone --depth 1 --branch {{ref}} https://github.com/10bedicu/onvif-console {{care_build}}/onvif-console
+    python3 -c "import json,pathlib; p=pathlib.Path('{{care_build}}/onvif-console/package.json'); d=json.loads(p.read_text()); d['packageManager']='pnpm@9.15.9'; p.write_text(json.dumps(d,indent=2)+chr(10))"
+    docker build -t onvif-console:local {{care_build}}/onvif-console
+    docker save onvif-console:local | ssh {{NIX_SSHOPTS}} {{target}} 'k3s ctr images import -'
+
+# Deploy/upgrade the console (kustomize apply). The public host only goes live
+# once the Cloudflare Access app + tunnel DNS route exist (see docs).
+onvif-console-deploy:
+    KUBECONFIG={{kubeconfig_path}} kubectl apply -k k8s/onvif-console
+
+# Show the state of the onvif-console namespace.
+onvif-console-status:
+    KUBECONFIG={{kubeconfig_path}} kubectl -n onvif-console get pods,svc,ingress
+
+# Tail the console logs.
+onvif-console-logs:
+    KUBECONFIG={{kubeconfig_path}} kubectl -n onvif-console logs -f deploy/onvif-console

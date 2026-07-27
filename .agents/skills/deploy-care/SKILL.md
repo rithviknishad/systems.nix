@@ -178,6 +178,13 @@ UptimeRobot, a cloud check, …). Good signals:
 - object-storage public host → `/minio/health/live` (200) if MinIO
 - TeleICU gateway host → `/` (200; note its nginx 404s on `/test`)
 - devices MFE host → `/health` (200)
+- physical ONVIF cameras → raw **TCP connect to the RTSP port (554)** (the
+  video pipeline is on-demand + token-gated, so a camera's power/network drop
+  is the only cleanly probeable failure); one probe per onboarded camera.
+  Consider a dedicated cameras subgroup separate from the main service group
+  (e.g. teleicu/cameras), since cameras are numerous, site-specific, and
+  physically fragile — you don't want their flakiness diluting the core
+  stack's status.
 - add certificate-expiry checks for public HTTPS endpoints
 Probe in-cluster-only components via their internal service address. If the
 repo has an existing monitoring config, extend it (and follow its refresh

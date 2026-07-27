@@ -183,6 +183,22 @@ containerd — upstream either publishes no image or bakes config/plugins in at
 build time. Nightly `pg_dump` CronJobs back up both databases. Documented on
 its own [CARE](care.md) page.
 
+### ONVIF Console — `k8s/onvif-console/`
+
+10bedicu's [onvif-console](https://github.com/10bedicu/onvif-console), a browser
+tool for probing/PTZ-testing ONVIF cameras (Next.js UI + FastAPI sidecar on one
+port). Deployed with kustomize (`just onvif-console-deploy`); public at
+`https://onvif-console.rithviknishad.dev`. The image is **built on the box with
+docker** (`just onvif-console-images`) and imported into k3s's containerd —
+upstream publishes no image. Because the console has no auth and relays the
+camera credentials you type in, its public host **must** sit behind Cloudflare
+Access (create the Access app *before* the DNS route), so its
+[uptime probe](monitoring.md) hits the in-cluster Service, not the login-gated
+edge — same as esphome/formance/bingo. WebRTC live video (go2rtc) is omitted on
+purpose (the tunnel can't carry its UDP media); the console falls back to ONVIF
+snapshot polling, which is all the conformance/PTZ testing needs. Documented on
+its own [ONVIF Console](onvif-console.md) page.
+
 ## The monitoring workload
 
 The largest thing on the cluster is the observability stack under

@@ -3,6 +3,10 @@ result-*
 .direnv/
 .pre-commit-config.yaml
 
+# Python bytecode caches — never source of truth, always recreatable.
+__pycache__/
+*.pyc
+
 # age private keys — never in git
 *.agekey
 *-age-key.txt

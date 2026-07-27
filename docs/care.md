@@ -26,9 +26,15 @@ subdomains would fail TLS at the edge.
 | `care-s3.rithviknishad.dev` | MinIO — presigned upload/download URLs |
 | `care-teleicu-gateway.rithviknishad.dev` | TeleICU gateway (nginx `:8001`) |
 | `care-teleicu-devices.rithviknishad.dev` | devices micro-frontend (module-federation remote) |
+| `mock-ptz-camera.rithviknishad.dev` | mock PTZ camera web UI (`:8080`, `admin`/`admin`) |
 
-All five are public by design — CARE brings its own auth. Uploads are capped
-at ~100 MB by Cloudflare's free-plan request-body limit.
+The CARE hosts are public by design — CARE brings its own auth. Uploads are
+capped at ~100 MB by Cloudflare's free-plan request-body limit. The mock
+camera is a synthetic test fixture with only baked-in `admin`/`admin` Basic
+auth and, unlike the other credential-relaying tools
+([ONVIF console](onvif-console.md), [ESPHome](esphome.md),
+[Ledger](formance.md)), is **not** behind Cloudflare Access — it holds nothing
+sensitive and only ever serves a synthetic feed.
 
 ## Architecture
 
@@ -234,11 +240,18 @@ pg_restore -d "$DATABASE_URL" --clean --if-exists care-<date>.dump
 
 ## Monitoring
 
-Gatus probes everything under the **`ohcnetwork/care`** group on
+Gatus probes everything under the **`ohcnetwork/care-avocado`** group on
 [status.rithviknishad.dev](https://status.rithviknishad.dev): the public
 edges (`care-api /ping/`, the SPA, the gateway root, the MFE's
 `/health`, all with TLS-expiry checks) and the in-cluster components (MinIO
-health, middleware, RTSPtoWeb, mock camera). The mock vitals devices are
-outbound-only and unprobeable; their failure shows up as stale observations.
-Alerts go to the usual `avocado-alerts` ntfy topic
-([Monitoring](monitoring.md)).
+health, middleware, RTSPtoWeb). Cameras live in their own
+**`ohcnetwork/teleicu/cameras`** subgroup (mock + physical), kept separate so
+camera flakiness doesn't dilute the main rollup. The mock camera is probed
+both in-cluster (liveness) and at its public edge
+`mock-ptz-camera.rithviknishad.dev` (+ TLS-expiry); physical ONVIF cameras are
+probed with a raw **TCP connect to their RTSP port (554)**, since a
+power/network drop is the failure that matters and the on-demand token-gated
+video pipeline isn't probeable without a live viewer; add one line per camera
+you onboard. The mock vitals devices are outbound-only and unprobeable; their
+failure shows up as stale observations. Alerts go to the usual
+`avocado-alerts` ntfy topic ([Monitoring](monitoring.md)).

@@ -7,6 +7,7 @@
 #           published upstream at ghcr.io/10bedicu)
 # Visit:    https://care-teleicu-gateway.rithviknishad.dev  (gateway, via nginx)
 #           https://care-teleicu-devices.rithviknishad.dev  (MFE remote)
+#           https://mock-ptz-camera.rithviknishad.dev        (mock camera web UI)
 #
 # Wiring (see docs/care.md for the post-deploy manual steps):
 #   mock devices --> gateway (daphne :8090) --> CARE API (JWT signed with the
@@ -350,12 +351,15 @@ spec:
   selector: { app: teleicu-devices-fe }
   ports: [{ port: 80 }]
 ---
-# --- Mock devices (testing only — NOT exposed publicly) -------------------------
+# --- Mock devices (testing fixtures) --------------------------------------------
 # ONVIF PTZ camera simulator: ONVIF+web UI on :8080, RTSP on :8554. The
 # gateway is configured against it manually in the CARE UI using the
 # in-cluster address (see docs/care.md). WS-Discovery multicast doesn't cross
 # the pod network, but device onboarding in CARE is by explicit address
-# anyway.
+# anyway. The web UI is also exposed publicly (Ingress below) at
+# mock-ptz-camera.rithviknishad.dev — admin/admin, no Access gate, since it's
+# a synthetic feed. The mock *vitals* devices further down stay unexposed
+# (outbound-only, no ports).
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -387,8 +391,11 @@ spec:
             # cert friction for the gateway's ONVIF client.
             - name: TLS_ENABLED
               value: "false"
+            # Perspective view into a 360° equirectangular pano (the
+            # image's bundled default) — looks like a real ICU room feed,
+            # unlike the synthetic test pattern.
             - name: RENDERER
-              value: testpattern
+              value: pano
           ports:
             - containerPort: 8080
             - containerPort: 8554
@@ -484,3 +491,15 @@ spec:
               service:
                 name: teleicu-devices-fe
                 port: { number: 80 }
+    # Mock PTZ camera web UI (public, admin/admin) — the ONVIF HTTP server and
+    # the browser preview share :8080, so route the whole host at it. RTSP
+    # (:8554) is in-cluster only and not fronted here.
+    - host: mock-ptz-camera.rithviknishad.dev
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: mock-ptz-camera
+                port: { number: 8080 }
