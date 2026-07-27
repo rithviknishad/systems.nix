@@ -285,6 +285,8 @@ accounts).
       (admin token) with `care_type: "camera"`, `type: "ONVIF"`, the `gateway`
       device id, the camera's `endpoint_address`/`username`/`password`, and the
       `stream_id` from step 1. Response `id` is the camera device id.
+   3. **Persist the stream declaratively** (see next note) so it survives a
+      stream-server/node restart — the runtime registration in step 1 does not.
 
    Also add a **Vitals observation device** for the mock HL7 monitor.
    Onboarding is always by explicit address (WS-Discovery multicast usually
@@ -295,10 +297,21 @@ accounts).
    and credentials if they weren't provided** — you need them for both the ONVIF
    GetStreamUri and the device payload.
 
-   **Streams are runtime-only:** RTSPtoWeb holds them in memory/emptyDir and
-   nothing re-registers them, so a stream-server restart drops every camera
-   feed. Restore by re-running the registration with the device's **existing**
-   `stream_id` (make the register step idempotent so the id is reused).
+   **Make camera streams declarative (survive restarts).** `care-register-camera`
+   writes to RTSPtoWeb's API at runtime → the stream lives only in the pod's
+   emptyDir and is lost on any restart. The durable fix is to bake the full
+   RTSPtoWeb `config.json` (server block + per-camera `streams`) into a seed the
+   stream-server copies into its emptyDir on **every** start. On this repo the
+   seed is the sops-encrypted `RTSPTOWEB_CONFIG_JSON` key of `teleicu-secret`
+   (streams can't be a plaintext ConfigMap — each channel URL embeds the
+   camera's `username:password`). Workflow: `just care-resolve-camera <ip>
+   <user> <pass> <stream_id> [profile] [onvif_port]`
+   (`k8s/care-teleicu/scripts/resolve-camera-stream.py`) prints the camera's
+   `streams` fragment; merge it under `"streams"` via `just care-teleicu-secrets`,
+   then `just care-teleicu-deploy` + `kubectl -n care-teleicu rollout restart
+   deploy/stream-server`. The `stream_id` key MUST equal the CARE device's
+   `stream_id`. On another platform, mirror this: keep the config in your
+   secret store, mount it, seed a writable copy at pod start.
 
 ## Gotchas (CARE-level — hold on any platform)
 
@@ -317,10 +330,13 @@ accounts).
   `/assets/remoteEntry.js`, and a bare `/remoteEntry.js` typically 404s.
 - **Mock PTZ camera** answers 401 on `/` without creds (still proves it's
   alive) — assert reachable + non-5xx, not strictly 200.
-- **Camera streams are runtime-only.** RTSPtoWeb keeps registered streams in
-  memory/emptyDir and nothing re-registers them, so a stream-server restart
-  silently breaks every camera feed. Re-register with each device's existing
-  `stream_id` after a restart; don't rely on the gateway to do it.
+- **Camera streams must be declarative, or they vanish on restart.** RTSPtoWeb
+  keeps streams in memory/emptyDir; registering via its API at runtime is
+  ephemeral, so a stream-server/node restart silently breaks every camera feed.
+  Seed the full `config.json` (incl. `streams`) from a mounted secret on every
+  pod start so cameras auto-restore. Runtime registration is fine for a quick
+  test, but persist anything real (on this repo: `RTSPTOWEB_CONFIG_JSON` in the
+  sops `teleicu-secret`; `just care-resolve-camera` prints the fragment).
 - **Mock ventilator** may crash-loop: current gateway images' pydantic
   Observation enum rejects ventilator metrics (PEEP…). Park it disabled; the
   HL7 monitor mock covers the vitals flow.

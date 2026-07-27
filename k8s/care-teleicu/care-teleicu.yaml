@@ -203,36 +203,17 @@ spec:
             - secretRef: { name: teleicu-secret }
 ---
 # --- RTSPtoWeb (stream server) --------------------------------------------------
-# Config template lives in the ConfigMap; an initContainer copies it to an
-# emptyDir because RTSPtoWeb wants to WRITE the config back when streams are
-# (de)registered via its API — a read-only ConfigMap mount would break that.
-# Streams are runtime state and are NOT auto re-registered (the gateway only
-# mints playback tokens + does PTZ; nothing syncs CARE cameras back into
-# RTSPtoWeb), so a pod restart drops them — re-run `just care-register-camera`
-# with the device's existing stream_id to restore playback. See docs/care.md.
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: rtsptoweb-config
-  namespace: care-teleicu
-data:
-  config.json: |
-    {
-      "server": {
-        "debug": false,
-        "http_port": ":8080",
-        "ice_servers": ["stun:stun.l.google.com:19302"],
-        "token": {
-          "enable": true,
-          "backend": "http://teleicu-middleware:8090/verifyToken"
-        }
-      },
-      "streams": {},
-      "channel_defaults": {
-        "on_demand": true
-      }
-    }
----
+# The full config.json (server block + camera streams) is DECLARATIVE: it lives
+# in the sops secret `teleicu-secret` under RTSPTOWEB_CONFIG_JSON (streams embed
+# per-camera RTSP URLs *with credentials*, so it can't sit in a plaintext
+# ConfigMap — see secret.example.yaml). An initContainer copies it into an
+# emptyDir because RTSPtoWeb rewrites its own config file when streams are
+# (de)registered via its API, and a read-only secret mount would break that.
+# Seeding from the secret means every pod/node restart RESTORES all known
+# cameras automatically — the old empty-ConfigMap seed lost them on restart.
+# To add/remove a camera: `just care-resolve-camera ...` prints its streams
+# fragment, merge it into RTSPTOWEB_CONFIG_JSON via `just care-teleicu-secrets`,
+# then `just care-teleicu-deploy` + restart the pod. See docs/care.md.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -245,6 +226,9 @@ spec:
   template:
     metadata:
       labels: { app: stream-server }
+      # Roll the pod when the config changes so restored streams pick up edits.
+      annotations:
+        checksum/rtsptoweb-config: "1"
     spec:
       initContainers:
         - name: seed-config
@@ -263,8 +247,13 @@ spec:
             - name: config
               mountPath: /config
       volumes:
+        # config.json comes from the sops secret (credentials in the RTSP URLs).
         - name: seed
-          configMap: { name: rtsptoweb-config }
+          secret:
+            secretName: teleicu-secret
+            items:
+              - key: RTSPTOWEB_CONFIG_JSON
+                path: config.json
         - name: config
           emptyDir: {}
 ---

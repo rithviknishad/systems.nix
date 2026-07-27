@@ -85,11 +85,15 @@ flowchart TB
 - The upstream gateway **nginx image hardcodes** its upstreams, so the
   Services must be named `teleicu-middleware` and `stream-server`.
 - **RTSPtoWeb** verifies per-stream tokens against the middleware's
-  `/verifyToken`; its config is seeded from a ConfigMap into an emptyDir
-  (it wants to write stream state back, so a read-only mount would break it).
-  Camera streams are registered at **runtime** (via `just care-register-camera`
-  — see [below](#post-deploy-wiring-one-time)) and are **not** auto
-  re-registered, so a stream-server restart drops them.
+  `/verifyToken`; its full `config.json` (server block + camera streams) is
+  **declarative** — seeded on every start from the `RTSPTOWEB_CONFIG_JSON` key
+  of the sops `teleicu-secret` into an emptyDir (it writes stream state back, so
+  a read-only mount would break it; the secret, not a plaintext ConfigMap,
+  because each stream's RTSP URL embeds camera credentials). A pod/node restart
+  therefore **restores all known cameras automatically**. Streams added ad-hoc
+  via `just care-register-camera` still live only in the emptyDir (lost on
+  restart) — persist a camera by adding it to the secret (see
+  [Declarative camera streams](#declarative-camera-streams)).
 
 ## Custom images (built on the box, no registry)
 
@@ -193,6 +197,8 @@ sets (care and the gateway each need their **own**).
       (admin token) with `care_type: "camera"`, `type: "ONVIF"`, the
       `gateway` device id, the camera's `endpoint_address`/`username`/
       `password`, and the `stream_id` from step 1.
+   3. **Persist the stream** so it survives restarts — see
+      [Declarative camera streams](#declarative-camera-streams) below.
 
    Also add a **Vitals observation device** for the mock HL7 monitor.
    WS-Discovery multicast doesn't cross the pod network, so onboarding is
@@ -201,11 +207,32 @@ sets (care and the gateway each need their **own**).
    current gateway image's observation schema rejects ventilator metrics like
    PEEP, so it can only crash-loop.)
 
-   > **Streams are runtime-only.** RTSPtoWeb keeps registered streams in an
-   > emptyDir, and nothing re-registers them — a stream-server restart drops
-   > every camera feed. Restore playback by re-running the same command with
-   > the device's existing id as the last arg (idempotent, keeps the id):
-   > `just care-register-camera <ip> <user> <pass> 0 80 <stream_id>`.
+### Declarative camera streams
+
+`just care-register-camera` writes a stream to RTSPtoWeb's API at **runtime**,
+so it lives only in the pod's emptyDir — a stream-server or node restart drops
+every such feed. To make a camera **survive restarts**, put its stream in the
+seed config (`RTSPTOWEB_CONFIG_JSON` in the sops `teleicu-secret`), which the
+stream-server re-seeds on every start:
+
+```sh
+# 1. Resolve the camera's RTSP URL (creds baked in) into a `streams` fragment.
+#    stream_id MUST equal the CARE device's stream_id (read the device detail
+#    API). onvif_port: 80 real, 8080 mock.
+just care-resolve-camera 192.168.1.50 admin 's3cr3t' <stream-id>
+
+# 2. Merge that fragment under "streams" in the secret's RTSPTOWEB_CONFIG_JSON.
+just care-teleicu-secrets
+
+# 3. Apply + roll the stream-server so it re-seeds.
+just care-teleicu-deploy
+kubectl -n care-teleicu rollout restart deploy/stream-server
+```
+
+The stream keys are stored **only in sops** (each channel URL embeds the
+camera's `username:password`), never in a plaintext ConfigMap. The three
+cameras onboarded on avocado (mock, MATRIX, PRAMA) are already baked in, so
+they come back automatically after a reboot.
 
 ## Object storage (MinIO)
 

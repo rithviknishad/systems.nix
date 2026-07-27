@@ -10,9 +10,11 @@
 # concrete URL with credentials baked in.
 #
 # Caveat (see docs/care.md): the stream is written to RTSPtoWeb's in-memory /
-# emptyDir config, so a stream-server pod restart drops it. Re-run this and the
-# device keeps working only if you reuse the same stream_id — so we accept an
-# optional stream_id argument to make re-registration idempotent.
+# emptyDir config via its API, so a stream-server pod restart drops it. For a
+# camera that must survive restarts, persist it declaratively instead — use
+# resolve-camera-stream.py (`just care-resolve-camera`) and merge the fragment
+# into RTSPTOWEB_CONFIG_JSON in the sops secret. We accept an optional stream_id
+# argument here so re-registration reuses the same id.
 #
 # argv: <ip> <username> <password> [profile_index=0] [onvif_port=80] [stream_id]
 import json

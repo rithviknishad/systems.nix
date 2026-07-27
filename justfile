@@ -338,13 +338,28 @@ care-register-mfe user="admin" pass="admin":
 # (the device itself is a separate POST /device/ call, see docs/care.md).
 # Runs scripts/register-camera-stream.py inside the middleware pod (has
 # onvif-zeep). onvif_port is 80 for real cameras, 8080 for the mock. Pass a
-# stream_id as the last arg to re-register the SAME id after a stream-server
-# restart (streams are runtime-only — see docs/care.md):
+# stream_id as the last arg to re-register the SAME id.
+# NOTE: this writes the stream to RTSPtoWeb's API at RUNTIME, so it's lost on a
+# stream-server/node restart. For a camera that should PERSIST, make it
+# declarative instead with `just care-resolve-camera` (below):
 #   just care-register-camera 192.168.1.50 admin 's3cr3t'
 care-register-camera ip user pass profile="0" onvif_port="80" stream_id="":
     KUBECONFIG={{kubeconfig_path}} kubectl -n care-teleicu exec -i deploy/teleicu-middleware -- \
         python - '{{ip}}' '{{user}}' '{{pass}}' '{{profile}}' '{{onvif_port}}' '{{stream_id}}' \
         < k8s/care-teleicu/scripts/register-camera-stream.py
+
+# Resolve a camera's RTSP URL over ONVIF and print a RTSPtoWeb `streams`
+# fragment (keyed by stream_id) for DECLARATIVE persistence. Paste/merge the
+# output under "streams" in RTSPTOWEB_CONFIG_JSON via `just care-teleicu-secrets`,
+# then `just care-teleicu-deploy` + `kubectl -n care-teleicu rollout restart
+# deploy/stream-server`. The stream_id MUST match the CARE device's stream_id
+# (read it from the device detail API). onvif_port is 80 for real cameras, 8080
+# for the mock. See docs/care.md "Declarative camera streams":
+#   just care-resolve-camera 192.168.1.50 admin 's3cr3t' <stream-id>
+care-resolve-camera ip user pass stream_id profile="0" onvif_port="80":
+    KUBECONFIG={{kubeconfig_path}} kubectl -n care-teleicu exec -i deploy/teleicu-middleware -- \
+        python - '{{ip}}' '{{user}}' '{{pass}}' '{{stream_id}}' '{{profile}}' '{{onvif_port}}' \
+        < k8s/care-teleicu/scripts/resolve-camera-stream.py
 
 # Edit the sops-encrypted care secret (see k8s/care/secret.example.yaml).
 care-secrets:
