@@ -35,8 +35,13 @@ flowchart TB
   type into the UI; pods reach LAN IPs (e.g. `192.168.165.x`) via node SNAT —
   the same path the TeleICU middleware uses. Unlike [ESPHome](esphome.md) there
   is no mDNS/discovery requirement, so no `hostNetwork` is needed.
-- **No server-side state.** Run history lives in the browser (localStorage), so
-  there is no PVC.
+- **Server-side run history.** Every finished run is persisted by the backend
+  to a **SQLite** DB (`/app/backend/data/onvif_console.db`, stdlib `sqlite3`),
+  keyed per camera — so history is shared across browsers/devices and survives
+  a tab closing mid-run. That directory is a **PVC** (`onvif-console-data`);
+  older builds kept history in the browser (localStorage) and needed no PVC,
+  and the UI auto-migrates any leftover localStorage runs into the backend once
+  on first load.
 
 ## Security & exposure
 
@@ -88,6 +93,22 @@ Deployment + Service in the namespace and set `GO2RTC_API` on the console (and
 `GO2RTC_PUBLIC_URL` to a browser-reachable address); note that a remote browser
 would still need a UDP-capable path to go2rtc, which the tunnel is not.
 
+## Run history (SQLite) & backups
+
+The backend writes each finished run to `/app/backend/data/onvif_console.db`;
+that path is the `onvif-console-data` PVC (local-path → `rpool`/ZFS), so
+history survives pod restarts and image reimports. The DB stores device
+metadata and full reports (host, model, serial, ONVIF call log) — **not camera
+passwords**. `ONVIF_DB_PATH` can relocate the file, but the default under the
+mounted PVC is what we use.
+
+Like every other PVC on this box it rides the **no-redundancy stripe** with no
+auto-snapshots (see [storage](storage.md)); this is throwaway camera-test
+history, so there's deliberately **no backup CronJob** (unlike the CARE/TeleICU
+DBs). To grab a copy anyway: `kubectl -n onvif-console exec deploy/onvif-console
+-- sqlite3 /app/backend/data/onvif_console.db ".backup /app/backend/data/backup.db"`
+then copy it out.
+
 ## Monitoring
 
 Gatus probes the console every minute via the in-cluster Service
@@ -103,6 +124,9 @@ answer with a login redirect and mask a dead backend (same pattern as ESPHome).
 - **`onvif-console:local` lives only in k3s's containerd.** Rebuild + reimport
   with `just onvif-console-images` after pulling upstream changes; a missing
   image surfaces as `ErrImageNeverPull`, not a silent pull.
+- **History lives in the `onvif-console-data` PVC, not the image.** Rebuilding
+  and reimporting the image keeps the DB (it's on the PVC); deleting the PVC
+  wipes all run history.
 - **Camera reachability is via node SNAT.** If a camera is on a segment the
   node can't route to, the console (like the TeleICU middleware) can't reach it
   either — test reachability from a pod first.

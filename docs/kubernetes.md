@@ -196,8 +196,10 @@ Access (create the Access app *before* the DNS route), so its
 [uptime probe](monitoring.md) hits the in-cluster Service, not the login-gated
 edge — same as esphome/formance/bingo. WebRTC live video (go2rtc) is omitted on
 purpose (the tunnel can't carry its UDP media); the console falls back to ONVIF
-snapshot polling, which is all the conformance/PTZ testing needs. Documented on
-its own [ONVIF Console](onvif-console.md) page.
+snapshot polling, which is all the conformance/PTZ testing needs. Run history
+is persisted server-side to a SQLite DB on the `onvif-console-data` PVC (the
+backend keeps it per camera). Documented on its own
+[ONVIF Console](onvif-console.md) page.
 
 ## The monitoring workload
 

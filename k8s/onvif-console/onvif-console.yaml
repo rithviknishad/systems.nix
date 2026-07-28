@@ -21,11 +21,30 @@
 # direct UDP, which the cloudflared tunnel can't carry, so the console falls
 # back to ONVIF snapshot polling (~1 fps). The conformance/PTZ testing (the
 # point of the tool) is unaffected. See docs/onvif-console.md to add go2rtc.
+#
+# Run history: the backend persists every finished run to a SQLite DB at
+# /app/backend/data/onvif_console.db (stdlib sqlite3, no extra service). That
+# directory is a PVC below, so history survives pod restarts and image
+# reimports — without it the DB would sit on the pod's ephemeral fs and vanish.
 ---
 apiVersion: v1
 kind: Namespace
 metadata:
   name: onvif-console
+---
+# Run-history SQLite DB (local-path -> rpool/ZFS). Small: device rows + one
+# JSON report blob per run, so 1Gi holds thousands of runs. The generic
+# PVC-fullness alert (k8s/monitoring/pvc-storage-vmrules.yaml) covers it.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: onvif-console-data
+  namespace: onvif-console
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 1Gi
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -34,6 +53,10 @@ metadata:
   namespace: onvif-console
 spec:
   replicas: 1
+  # Recreate: the RWO history PVC can't be attached to a new pod while the old
+  # one still holds it during a rolling update on this single node.
+  strategy:
+    type: Recreate
   selector:
     matchLabels: { app: onvif-console }
   template:
@@ -54,6 +77,14 @@ spec:
           resources:
             requests: { cpu: 50m, memory: 128Mi }
             limits: { memory: 512Mi }
+          # Default DB path is /app/backend/data/onvif_console.db (Dockerfile
+          # WORKDIR is /app/backend); mounting the PVC there persists it.
+          volumeMounts:
+            - name: data
+              mountPath: /app/backend/data
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: onvif-console-data }
 ---
 apiVersion: v1
 kind: Service
