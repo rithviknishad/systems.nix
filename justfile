@@ -205,6 +205,39 @@ formance-secrets:
 formance-secrets-rekey:
     sops updatekeys secrets/formance.enc.yaml
 
+# --- Kite (Kubernetes dashboard) ---------------------------------------------
+# Full cluster-admin console on k3s (k8s/kite). Gated by its OWN GitHub OAuth
+# (only the mapped GitHub user gets in), so no Cloudflare Access in front.
+#   https://kite.rithviknishad.dev  (Cloudflare Tunnel + GitHub OAuth)
+#   http://avocado (Host: kite.avocado.local) over Tailscale.
+# See docs/kite.md.
+
+# Deploy/upgrade Kite: kustomize manifests, then the sops-encrypted k8s Secret
+# piped straight into kubectl (plaintext never touches disk). Ends with a
+# rollout restart so the pod reloads the new secret and config.
+kite-deploy:
+    KUBECONFIG={{kubeconfig_path}} kubectl apply -k k8s/kite
+    sops --decrypt secrets/kite.enc.yaml \
+        | KUBECONFIG={{kubeconfig_path}} kubectl apply -f -
+    KUBECONFIG={{kubeconfig_path}} kubectl -n kite rollout restart deploy/kite
+
+# Show the state of the kite namespace.
+kite-status:
+    KUBECONFIG={{kubeconfig_path}} kubectl -n kite get pods,svc,ingress,pvc
+
+# Tail the Kite server logs.
+kite-logs:
+    KUBECONFIG={{kubeconfig_path}} kubectl -n kite logs -f deploy/kite
+
+# Edit the sops-encrypted Kite secret (JWT/encrypt keys, GitHub OAuth app,
+# break-glass password). Redeploy after to apply.
+kite-secrets:
+    sops secrets/kite.enc.yaml
+
+# Re-encrypt the Kite secret after changing recipients in .sops.yaml.
+kite-secrets-rekey:
+    sops updatekeys secrets/kite.enc.yaml
+
 # --- Bingo (boardgame.io multiplayer party game) -----------------------------
 # Single-origin app: server.cjs (Koa) serves the built SPA *and* the
 # boardgame.io multiplayer API/websocket on :8000. The image is built by Nix

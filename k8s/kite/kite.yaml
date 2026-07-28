@@ -1,0 +1,222 @@
+# Kite — modern Kubernetes dashboard on k3s.
+#
+# Deploy:   just kite-deploy   (kubectl apply -k k8s/kite + sops secret)
+# Watch:    kubectl -n kite get pods -w
+# Visit:    https://kite.rithviknishad.dev  (GitHub OAuth login; after tunnel route)
+#
+# Kite is a full cluster-admin console: its ServiceAccount is bound to a ["*"]
+# ClusterRole, and it exposes a web terminal + kubectl console. It is therefore
+# gated by its OWN GitHub OAuth login (declared in the kite-config ConfigMap):
+# only the mapped GitHub user gets in, so — unlike esphome/formance/onvif — the
+# public host does NOT need a Cloudflare Access gate in front.
+#
+# Config is declarative: KITE_CONFIG_FILE points at the mounted config.yaml,
+# which Kite re-applies to its SQLite DB on every startup (OAuth + RBAC become
+# READ-ONLY in the UI). ${VAR} placeholders in that file expand from the pod
+# env, so the GitHub client id/secret and the break-glass password come from the
+# sops-backed `kite-secret`, never from a committed file.
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: kite
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kite
+  namespace: kite
+---
+# Full cluster admin — Kite manages every resource type (create/update/delete,
+# scale, exec, logs). Scope this down to read-only verbs if the dashboard is
+# ever shared beyond the single trusted admin.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kite
+rules:
+  - apiGroups: ["*"]
+    resources: ["*"]
+    verbs: ["*"]
+  - nonResourceURLs: ["*"]
+    verbs: ["*"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kite
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kite
+subjects:
+  - kind: ServiceAccount
+    name: kite
+    namespace: kite
+---
+# SQLite lives here. 1Gi is plenty for users/roles/OAuth config/audit rows.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: kite-data
+  namespace: kite
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kite-config
+  namespace: kite
+data:
+  config.yaml: |
+    # Break-glass password account (provider "password"). Kite always grants the
+    # super user the admin role, so an operator can still get in if GitHub OAuth
+    # ever breaks. The password expands from ${KITE_SUPERUSER_PASSWORD} (sops);
+    # read it back with `just kite-secrets`.
+    superUser:
+      username: admin
+      password: "${KITE_SUPERUSER_PASSWORD}"
+
+    # Single cluster for now: Kite uses avocado's own k3s via its in-cluster
+    # ServiceAccount (the ["*"] ClusterRole above). Multi-cluster comes later.
+    clusters:
+      - name: avocado
+        inCluster: true
+        default: true
+
+    # GitHub is a plain OAuth2 app (no OIDC discovery), so the auth/token/userinfo
+    # URLs are explicit. Kite reads the `login` field from api.github.com/user as
+    # the username. The redirect URL is
+    # https://kite.rithviknishad.dev/api/auth/callback — the HOST env var pins it
+    # regardless of proxy headers. clientId is not secret, but it lives in the
+    # sops secret too so the whole OAuth app is set in one place (`just kite-secrets`).
+    oauth:
+      - name: github
+        clientId: "${GITHUB_CLIENT_ID}"
+        clientSecret: "${GITHUB_CLIENT_SECRET}"
+        authUrl: "https://github.com/login/oauth/authorize"
+        tokenUrl: "https://github.com/login/oauth/access_token"
+        userInfoUrl: "https://api.github.com/user"
+        scopes: "read:user"
+        usernameClaim: "login"
+        enabled: true
+
+    # A fresh OAuth login has NO permissions until RBAC maps it to a role. Map the
+    # GitHub account to the built-in `admin` role (full access). GitHub OAuth apps
+    # do not return groups, so map by username, not oidcGroups.
+    rbac:
+      roleMapping:
+        - name: admin
+          users: ["rithviknishad"]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kite
+  namespace: kite
+spec:
+  replicas: 1
+  # Recreate, not RollingUpdate: SQLite sits on a single ReadWriteOnce PVC, and
+  # two pods cannot mount it at once during a rollout.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels: { app: kite }
+  template:
+    metadata:
+      labels: { app: kite }
+      annotations:
+        # Bump to roll the pod when config.yaml changes (ConfigMap is mounted,
+        # but the env/secret is not auto-reloaded).
+        checksum/config: config-v1
+    spec:
+      serviceAccountName: kite
+      containers:
+        - name: kite
+          image: ghcr.io/kite-org/kite:latest
+          imagePullPolicy: IfNotPresent
+          ports: [{ containerPort: 8080 }]
+          env:
+            # Load the declarative config file (OAuth + RBAC + super user).
+            - name: KITE_CONFIG_FILE
+              value: /etc/kite/config.yaml
+            # Pin the public origin so OAuth callback URLs are correct.
+            - name: HOST
+              value: https://kite.rithviknishad.dev
+            # Embedded SQLite on the PVC (survives restarts).
+            - name: DB_TYPE
+              value: sqlite
+            - name: DB_DSN
+              value: /data/kite.db
+          # JWT_SECRET, KITE_ENCRYPT_KEY, GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET,
+          # KITE_SUPERUSER_PASSWORD — from the sops-backed kite-secret (applied
+          # by `just kite-deploy`, not part of the kustomize build).
+          envFrom:
+            - secretRef: { name: kite-secret }
+          readinessProbe:
+            httpGet: { path: /healthz, port: 8080 }
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: 8080 }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests: { cpu: "100m", memory: "128Mi" }
+            limits: { cpu: "1000m", memory: "512Mi" }
+          volumeMounts:
+            - name: config
+              mountPath: /etc/kite
+              readOnly: true
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: config
+          configMap: { name: kite-config }
+        - name: data
+          persistentVolumeClaim: { claimName: kite-data }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kite
+  namespace: kite
+spec:
+  selector: { app: kite }
+  ports: [{ name: http, port: 8080, targetPort: 8080 }]
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: kite
+  namespace: kite
+spec:
+  rules:
+    # Public host (Cloudflare Tunnel -> Traefik). Kite's own GitHub OAuth is the
+    # auth gate; the SPA and /api (incl. websocket for terminals/logs) share this
+    # single origin, which Traefik + the tunnel proxy without extra config.
+    - host: kite.rithviknishad.dev
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: kite
+                port:
+                  number: 8080
+    # Tailnet host: curl -H 'Host: kite.avocado.local' http://avocado/
+    - host: kite.avocado.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: kite
+                port:
+                  number: 8080

@@ -68,3 +68,13 @@ creation_rules:
       - age:
           - *admin
           - *avocado
+
+  # Kite dashboard k8s Secret (JWT + encrypt keys, GitHub OAuth app id/secret,
+  # break-glass super-user password). A full k8s Secret manifest, decrypted at
+  # deploy time on the admin machine (`just kite-deploy`); encrypted to avocado
+  # too for consistency.
+  - path_regex: secrets/kite\.enc\.yaml$
+    key_groups:
+      - age:
+          - *admin
+          - *avocado

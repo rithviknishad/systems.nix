@@ -163,6 +163,20 @@ data:
         alerts:
           - type: ntfy
 
+      # Kite Kubernetes dashboard (k8s/kite). /healthz is unauthenticated (the
+      # pod's own liveness path), so probe the full public path + cert directly:
+      # the GitHub OAuth login sits on the app routes, not on /healthz, so it
+      # cannot mask a dead backend here.
+      - name: kite.rithviknishad.dev
+        group: public
+        url: "https://kite.rithviknishad.dev/healthz"
+        interval: 5m
+        conditions:
+          - "[STATUS] == 200"
+          - "[CERTIFICATE_EXPIRATION] > 240h"
+        alerts:
+          - type: ntfy
+
       # --- ohcnetwork/care-avocado (k8s/care + k8s/care-teleicu) -------------
       # Public hosts get edge-path probes with TLS-expiry checks; components
       # without a public health surface are probed via in-cluster Services.
@@ -394,7 +408,7 @@ spec:
         app.kubernetes.io/name: gatus
       annotations:
         # Bump to roll the pod when the config changes.
-        checksum/config: config-v17
+        checksum/config: config-v18
     spec:
       securityContext:
         runAsNonRoot: true

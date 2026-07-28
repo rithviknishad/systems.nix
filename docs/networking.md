@@ -67,6 +67,7 @@ flowchart LR
             esphome[esphome]
             ledger[formance console]
             bingo[bingo]
+            kite[kite]
             care[care + teleicu]
         end
     end
@@ -80,6 +81,7 @@ flowchart LR
     traefik -->|esphome.rithviknishad.dev| esphome
     traefik -->|ledger.rithviknishad.dev| ledger
     traefik -->|bingo.rithviknishad.dev| bingo
+    traefik -->|kite.rithviknishad.dev| kite
     traefik -->|care*.rithviknishad.dev x5| care
 ```
 
@@ -98,6 +100,7 @@ matched returns `http_status:404`.
 | `esphome.rithviknishad.dev` | ESPHome `esphome` | [ESPHome](esphome.md) |
 | `ledger.rithviknishad.dev` | Formance `console` | [Formance Ledger](formance.md) |
 | `bingo.rithviknishad.dev` | Bingo `bingo` | [Kubernetes](kubernetes.md) |
+| `kite.rithviknishad.dev` | Kite `kite` | [Kite](kite.md) |
 | `care.rithviknishad.dev` | CARE `care-fe` | [CARE](care.md) |
 | `care-api.rithviknishad.dev` | CARE `care-backend` | [CARE](care.md) |
 | `care-s3.rithviknishad.dev` | CARE `minio` (presigned URLs) | [CARE](care.md) |
@@ -116,6 +119,9 @@ Notes:
 - Formance Ledger **requires** Cloudflare Access (micro-stack mode has no login
   of its own) — create the Access app *before* the DNS route; see
   [Formance Ledger](formance.md).
+- Kite carries its **own GitHub OAuth** login (full cluster-admin console), so
+  it is the one public host that does **not** need Cloudflare Access in front;
+  see [Kite](kite.md).
 - The metrics/logs databases (VMSingle, VictoriaLogs) are **deliberately not**
   exposed through the tunnel — reach them over Tailscale.
 

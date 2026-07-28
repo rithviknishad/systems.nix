@@ -37,6 +37,7 @@ you) holds a key that can open them.
 | `secrets/monitoring.enc.yaml` | admin + avocado | Grafana admin password, ntfy token |
 | `secrets/care.enc.yaml` | admin + avocado | CARE k8s Secret: Django key, JWKS, Postgres + MinIO credentials |
 | `secrets/care-teleicu.enc.yaml` | admin + avocado | TeleICU gateway k8s Secret: Django key, gateway JWKS, Postgres + S3 credentials |
+| `secrets/kite.enc.yaml` | admin + avocado | Kite k8s Secret: JWT + encrypt keys, GitHub OAuth app id/secret, break-glass password |
 
 ## How the box consumes secrets
 

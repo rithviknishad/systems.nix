@@ -201,6 +201,21 @@ is persisted server-side to a SQLite DB on the `onvif-console-data` PVC (the
 backend keeps it per camera). Documented on its own
 [ONVIF Console](onvif-console.md) page.
 
+### Kite (Kubernetes dashboard) — `k8s/kite/`
+
+[Kite](https://github.com/kite-org/kite), a modern Kubernetes dashboard (Go
+server + SPA, live logs, web terminal, kubectl console). Deployed with kustomize
+plus a sops-encrypted Secret (`just kite-deploy`); public at
+`https://kite.rithviknishad.dev`. Kite is a **full cluster-admin console** — its
+ServiceAccount uses a `["*"]` ClusterRole — so it gates itself with **GitHub
+OAuth** (only the mapped GitHub user gets in), the one public workload that
+carries its own login instead of a Cloudflare Access gate. OAuth and RBAC are
+configured declaratively via a mounted `config.yaml` (read-only in the UI); the
+GitHub client secret and a break-glass password inject from the sops Secret. Its
+[uptime probe](monitoring.md) hits the public `/healthz` (no auth on that path),
+so it covers the full edge path + cert. Documented on its own [Kite](kite.md)
+page.
+
 ## The monitoring workload
 
 The largest thing on the cluster is the observability stack under

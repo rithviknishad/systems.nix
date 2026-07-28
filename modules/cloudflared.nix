@@ -76,6 +76,11 @@ in
         # route dns avocado onvif-console.rithviknishad.dev`. See
         # docs/onvif-console.md.
         "onvif-console.rithviknishad.dev" = "http://localhost:80";
+        # Kite Kubernetes dashboard (k8s/kite) — a full cluster-admin console.
+        # Unlike the auth-less tools above, Kite gates itself with GitHub OAuth
+        # (only the mapped GitHub user gets in), so this host does NOT need a
+        # Cloudflare Access app in front. See docs/kite.md.
+        "kite.rithviknishad.dev" = "http://localhost:80";
       };
     };
   };
