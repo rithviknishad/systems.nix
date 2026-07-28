@@ -328,6 +328,14 @@ accounts).
 - **Devices MFE `remoteEntry.js` path** — confirm it against the deployed MFE
   before registering the plug; module-federation Vite builds emit
   `/assets/remoteEntry.js`, and a bare `/remoteEntry.js` typically 404s.
+- **PTZ control hardcodes port 80.** The `care_teleicu_devices` camera_device
+  plug (`camera_device/viewsets/actions.py::get_gateway_request_data`) sends
+  the ONVIF port to the gateway as a **hardcoded `80`** for every PTZ call —
+  it never reads a port from the device's metadata. Fine for real cameras
+  (ONVIF's conventional default), but breaks anything whose ONVIF server
+  isn't on 80 (e.g. a mock camera on 8080): give it a Service-level port
+  alias (`80 → containerPort <real-port>`) rather than expecting the plug to
+  respect a configured port.
 - **Mock PTZ camera** answers 401 on `/` without creds (still proves it's
   alive) — assert reachable + non-5xx, not strictly 200.
 - **Camera streams must be declarative, or they vanish on restart.** RTSPtoWeb

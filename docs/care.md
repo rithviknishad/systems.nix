@@ -207,6 +207,18 @@ sets (care and the gateway each need their **own**).
    current gateway image's observation schema rejects ventilator metrics like
    PEEP, so it can only crash-loop.)
 
+   > **PTZ control hardcodes port 80.** CARE's `care_teleicu_devices` plug
+   > (`camera_device/viewsets/actions.py::get_gateway_request_data`) sends
+   > `{"hostname": endpoint_address, "port": 80, ...}` to the gateway for
+   > *every* PTZ call (status/presets/gotoPreset/absoluteMove/relativeMove) —
+   > it never reads a port from device metadata. Real ONVIF cameras answer on
+   > 80 by default, so this is invisible for them, but the **mock** camera's
+   > ONVIF/API server only listens on `:8080`. The fix lives in the k8s layer:
+   > the `mock-ptz-camera` Service has an `onvif-compat` port aliasing Service
+   > `80 → containerPort 8080`, so the hardcoded port 80 still lands on the
+   > mock's real listener. If a future real camera's ONVIF is ever on a
+   > non-80 port, it needs the same Service-level alias (or an upstream fix).
+
 ### Declarative camera streams
 
 `just care-register-camera` writes a stream to RTSPtoWeb's API at **runtime**,

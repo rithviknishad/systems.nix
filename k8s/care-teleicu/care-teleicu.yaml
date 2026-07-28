@@ -399,6 +399,17 @@ spec:
   ports:
     - name: http
       port: 8080
+    # CARE's care_teleicu_devices camera_device plug hardcodes port 80 for
+    # every PTZ call (get_gateway_request_data() in camera_device/viewsets/
+    # actions.py sends {"port": 80} unconditionally — it doesn't read a port
+    # from device metadata). Real ONVIF cameras answer on 80 by default, but
+    # the mock only listens on 8080, so alias Service port 80 → the same
+    # containerPort. Without this, PTZ status/preset/move calls for the mock
+    # camera fail to connect even though its RTSP stream (registered with an
+    # explicit onvif_port=8080) works fine.
+    - name: onvif-compat
+      port: 80
+      targetPort: 8080
     - name: rtsp
       port: 8554
 ---
