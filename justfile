@@ -449,3 +449,57 @@ onvif-console-status:
 # Tail the console logs.
 onvif-console-logs:
     KUBECONFIG={{kubeconfig_path}} kubectl -n onvif-console logs -f deploy/onvif-console
+
+# --- Open Terminology Server (ohcnetwork/open-healthcare-terminology-server) --
+# FHIR-ish terminology API (Postgres + pgvector), single image run as api +
+# celery worker (k8s/ots). Public host is app-key gated (x-api-key), no Access
+# gate. CPU FastEmbed (bge-small-en-v1.5) for vector search.
+#   https://ots.rithviknishad.dev/docs        Swagger (public path)
+#   http://avocado (Host: ots.avocado.local)  over Tailscale
+#   http://ots-api.ots:8000                   in-cluster (CARE), send x-api-key
+# See docs/ots.md.
+
+ots_build := ".build"
+
+# Build + import the OTS image. Same no-registry pattern as care-images:
+# docker build on this machine, then pipe `docker save` into k3s's containerd
+# over root ssh. Pass a git ref to pin (defaults to main).
+ots-images ref="main":
+    rm -rf {{ots_build}}/ots
+    mkdir -p {{ots_build}}
+    git clone --depth 1 --branch {{ref}} https://github.com/ohcnetwork/open-healthcare-terminology-server {{ots_build}}/ots
+    docker build -t open-terminology-server:local {{ots_build}}/ots
+    docker save open-terminology-server:local | ssh {{NIX_SSHOPTS}} {{target}} 'k3s ctr images import -'
+
+# Deploy/upgrade OTS: manifests via kustomize, then the sops-encrypted Secret
+# piped straight into kubectl (plaintext never touches disk). Secret changes
+# need a rollout restart of the consumers to be seen.
+ots-deploy:
+    KUBECONFIG={{kubeconfig_path}} kubectl apply -k k8s/ots
+    sops --decrypt secrets/ots.enc.yaml \
+        | KUBECONFIG={{kubeconfig_path}} kubectl apply -f -
+
+# Show the state of the ots namespace.
+ots-status:
+    KUBECONFIG={{kubeconfig_path}} kubectl -n ots get pods,svc,ingress,pvc
+
+# Tail an OTS component's logs (ots-api, ots-worker, postgres).
+ots-logs component="ots-api":
+    KUBECONFIG={{kubeconfig_path}} kubectl -n ots logs -f deploy/{{component}}
+
+# Run the OTS CLI inside the api pod (e.g. `just ots-cli icd download`,
+# `just ots-cli common embed -- --help`). See docs/ots.md "Loading data".
+ots-cli *args:
+    KUBECONFIG={{kubeconfig_path}} kubectl -n ots exec -it deploy/ots-api -- python -m ots.cli {{args}}
+
+# Edit the sops-encrypted OTS secret (see k8s/ots/secret.example.yaml).
+ots-secrets:
+    sops secrets/ots.enc.yaml
+
+ots-secrets-rekey:
+    sops updatekeys secrets/ots.enc.yaml
+
+# One-time: point the public OTS hostname at the tunnel. Needs the cloudflared
+# login cert (cloudflared tunnel login) on this machine.
+ots-dns:
+    cloudflared tunnel route dns avocado ots.rithviknishad.dev

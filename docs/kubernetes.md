@@ -216,6 +216,25 @@ GitHub client secret and a break-glass password inject from the sops Secret. Its
 so it covers the full edge path + cert. Documented on its own [Kite](kite.md)
 page.
 
+### Open Terminology Server — `k8s/ots/`
+
+[Open Terminology Server](https://github.com/ohcnetwork/open-healthcare-terminology-server),
+OHC's read-heavy FHIR-ish terminology API (Starlette + Postgres/pgvector, with a
+Celery worker for embedding jobs — the broker/result backend is Postgres itself,
+no Redis). One upstream image runs as `ots-api` + `ots-worker`. Deployed with
+kustomize plus a sops-encrypted Secret (`just ots-deploy`); public at
+`https://ots.rithviknishad.dev` and on the tailnet at `ots.avocado.local`, and
+reachable in-cluster (e.g. by CARE) at `http://ots-api.ots:8000`. Unlike the
+auth-less tools, it carries its **own API key** — every path is gated by the
+`x-api-key` header except `/health` and the Swagger assets — so, like Kite, its
+public host does **not** need a Cloudflare Access gate. The image is **built on
+the box with docker** (`just ots-images`) and imported into k3s's containerd
+(upstream publishes no image); an initContainer runs `alembic upgrade head` on
+start. Vector search uses **CPU-only FastEmbed** (`bge-small-en-v1.5`), cached
+on a shared data PVC — the box has no GPU. The server boots empty; terminologies
+(SNOMED CT, LOINC, ICD) are imported with its CLI from release files staged on
+the data PVC. Documented on its own [Terminology Server](ots.md) page.
+
 ## The monitoring workload
 
 The largest thing on the cluster is the observability stack under

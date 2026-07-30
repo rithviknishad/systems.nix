@@ -78,3 +78,13 @@ creation_rules:
       - age:
           - *admin
           - *avocado
+
+  # Open Terminology Server k8s Secret (Postgres credentials + the four OTS_*_URL
+  # connection strings + OTS_API_KEY). A full k8s Secret manifest, decrypted at
+  # deploy time on the admin machine (`just ots-deploy`); encrypted to avocado
+  # too for consistency.
+  - path_regex: secrets/ots\.enc\.yaml$
+    key_groups:
+      - age:
+          - *admin
+          - *avocado

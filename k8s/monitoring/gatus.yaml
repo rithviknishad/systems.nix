@@ -263,6 +263,32 @@ data:
         alerts:
           - type: ntfy
 
+      # --- ohcnetwork/ots (Open Terminology Server) --------------------------
+
+      # OTS api liveness in-cluster. /health is a public path (no key), so a
+      # plain 200 proves the Starlette app + DB are up. This is also the path
+      # CARE-side clients depend on.
+      - name: ots-api
+        group: ohcnetwork/ots
+        url: "http://ots-api.ots.svc:8000/health"
+        interval: 1m
+        conditions:
+          - "[STATUS] == 200"
+        alerts:
+          - type: ntfy
+
+      # OTS public edge — measures the full edge->tunnel->Traefik->pod path
+      # plus cert expiry. /health needs no key, so this stays a clean probe.
+      - name: ots.rithviknishad.dev
+        group: ohcnetwork/ots
+        url: "https://ots.rithviknishad.dev/health"
+        interval: 5m
+        conditions:
+          - "[STATUS] == 200"
+          - "[CERTIFICATE_EXPIRATION] > 240h"
+        alerts:
+          - type: ntfy
+
       # --- ohcnetwork/teleicu/cameras (own subgroup: cameras are numerous,
       # site-specific, and physically fragile — kept out of the main
       # ohcnetwork/care rollup so camera flakiness doesn't dilute it). ------
@@ -408,7 +434,7 @@ spec:
         app.kubernetes.io/name: gatus
       annotations:
         # Bump to roll the pod when the config changes.
-        checksum/config: config-v18
+        checksum/config: config-v19
     spec:
       securityContext:
         runAsNonRoot: true

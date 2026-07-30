@@ -1,0 +1,268 @@
+# Open Terminology Server (OTS) on k3s.
+#
+# Deploy:   just ots-deploy        (manifests + sops secret)
+# Image:    just ots-images        (open-terminology-server:local — built on
+#           the box with docker and imported into k3s; see docs/ots.md)
+# Visit:    https://ots.rithviknishad.dev/docs (Swagger; public path, no key)
+#           http://avocado (Host: ots.avocado.local) over Tailscale
+# In-cluster (e.g. CARE):  http://ots-api.ots:8000  (send the x-api-key header)
+#
+# Architecture: a small, read-heavy FHIR-ish terminology API backed by
+# Postgres + pgvector. Upstream ships a single image run three ways:
+#   api    -> Starlette/uvicorn on :8000 (the query surface)
+#   worker -> Celery worker for embedding population jobs; the broker AND
+#             result backend are Postgres itself (no Redis needed)
+#   postgres -> pgvector/pgvector:pg16 (one denormalized row per concept +
+#             model-scoped vector tables)
+#
+# Auth: every path is gated by an API key (header x-api-key) EXCEPT the paths
+# in OTS_PUBLIC_PATHS (/health, /docs, /openapi.json, /favicon.ico). The host
+# is public by design — CARE and other clients call it server-to-server with
+# the shared key — so there is no Cloudflare Access gate in front (see
+# modules/cloudflared.nix).
+#
+# Embeddings: CPU-only FastEmbed with BAAI/bge-small-en-v1.5 (384-dim ONNX).
+# The ~150MB model is cached on the shared data PVC on first use; the box has
+# no GPU, so this is the pragmatic local option (no OpenAI key, no cost).
+#
+# Data: the server boots EMPTY. Terminologies are imported with the CLI from
+# release files staged on the data PVC (see docs/ots.md "Loading data").
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ots
+---
+# --- Non-secret configuration ------------------------------------------------
+# DB URLs + POSTGRES_* + OTS_API_KEY live in the sops Secret (ots-secret),
+# because they embed the password / are the key. Everything else is here.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ots-env
+  namespace: ots
+data:
+  OTS_API_KEY_HEADER: x-api-key
+  # /health is public so kubelet probes and Gatus can hit it without the key;
+  # it exposes no sensitive data. The rest are Swagger/OpenAPI assets.
+  OTS_PUBLIC_PATHS: /health,/docs,/openapi.json,/favicon.ico
+  # Real Celery worker (not eager) — jobs run in the worker Deployment.
+  OTS_CELERY_TASK_ALWAYS_EAGER: "false"
+  # CPU-only local embeddings. This model key is the default used for
+  # query-time vector search; population jobs must use the SAME key.
+  OTS_EMBEDDING_PROVIDER: fastembed
+  OTS_EMBEDDING_MODEL: BAAI/bge-small-en-v1.5
+  OTS_EMBEDDING_MODEL_KEY: fastembed:BAAI/bge-small-en-v1.5:384
+  OTS_EMBEDDING_DIMENSIONS: "384"
+  OTS_EMBEDDING_PARALLEL_REQUESTS: "1"
+  # Cache the ONNX model on the shared data PVC so it survives pod restarts
+  # and is shared between api (query_embed) and worker (passage_embed).
+  OTS_FASTEMBED_CACHE_DIR: /app/data/models/fastembed
+  OTS_QUERY_EMBEDDING_CACHE_SIZE: "1024"
+  OTS_DISABLE_QUERY_EMBEDDING_CACHE: "false"
+---
+# --- Postgres (pgvector) -----------------------------------------------------
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ots-postgres
+  namespace: ots
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 25Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  namespace: ots
+spec:
+  replicas: 1
+  # Recreate: two Postgres on the same local-path data dir would corrupt it.
+  strategy: { type: Recreate }
+  selector:
+    matchLabels: { app: postgres }
+  template:
+    metadata:
+      labels: { app: postgres }
+    spec:
+      containers:
+        - name: postgres
+          image: pgvector/pgvector:pg16
+          envFrom:
+            - secretRef: { name: ots-secret }
+          ports: [{ containerPort: 5432 }]
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+          readinessProbe:
+            exec:
+              command: [sh, -c, "pg_isready -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\""]
+            initialDelaySeconds: 5
+            periodSeconds: 10
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: ots-postgres }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: ots
+spec:
+  selector: { app: postgres }
+  ports: [{ port: 5432 }]
+---
+# --- Shared runtime data (source release files + FastEmbed model cache) -------
+# Mounted read-write into both api and worker. RWO is fine: single node, and
+# k3s local-path lets multiple pods on the same node mount the same claim
+# (this mirrors docker-compose bind-mounting ./data into both services).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ots-data
+  namespace: ots
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 15Gi
+---
+# --- API (Starlette/uvicorn) -------------------------------------------------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ots-api
+  namespace: ots
+spec:
+  replicas: 1
+  # Recreate: the api and worker share one RWO data PVC, so avoid a second
+  # pod holding the mount during a rollout.
+  strategy: { type: Recreate }
+  selector:
+    matchLabels: { app: ots-api }
+  template:
+    metadata:
+      labels: { app: ots-api }
+    spec:
+      initContainers:
+        # Block until Postgres accepts connections, then run migrations.
+        # alembic upgrade head is idempotent, so running it on every start is
+        # safe and keeps the schema current after an image bump.
+        - name: wait-db
+          image: open-terminology-server:local
+          imagePullPolicy: Never
+          envFrom:
+            - configMapRef: { name: ots-env }
+            - secretRef: { name: ots-secret }
+          command: [sh, -c, "until pg_isready -h postgres -U \"$POSTGRES_USER\"; do echo 'waiting for postgres...'; sleep 2; done"]
+        - name: migrate
+          image: open-terminology-server:local
+          imagePullPolicy: Never
+          envFrom:
+            - configMapRef: { name: ots-env }
+            - secretRef: { name: ots-secret }
+          command: [alembic, upgrade, head]
+      containers:
+        - name: api
+          image: open-terminology-server:local
+          imagePullPolicy: Never
+          command: [python, -m, uvicorn, app:app, --host, 0.0.0.0, --port, "8000"]
+          envFrom:
+            - configMapRef: { name: ots-env }
+            - secretRef: { name: ots-secret }
+          ports: [{ containerPort: 8000 }]
+          volumeMounts:
+            - name: data
+              mountPath: /app/data
+          readinessProbe:
+            httpGet: { path: /health, port: 8000 }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /health, port: 8000 }
+            initialDelaySeconds: 30
+            periodSeconds: 30
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: ots-data }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ots-api
+  namespace: ots
+spec:
+  selector: { app: ots-api }
+  ports: [{ port: 8000 }]
+---
+# --- Celery worker (embedding population jobs) -------------------------------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ots-worker
+  namespace: ots
+spec:
+  replicas: 1
+  # Recreate: shares the RWO data PVC with the api pod (see above).
+  strategy: { type: Recreate }
+  selector:
+    matchLabels: { app: ots-worker }
+  template:
+    metadata:
+      labels: { app: ots-worker }
+    spec:
+      initContainers:
+        - name: wait-db
+          image: open-terminology-server:local
+          imagePullPolicy: Never
+          envFrom:
+            - configMapRef: { name: ots-env }
+            - secretRef: { name: ots-secret }
+          command: [sh, -c, "until pg_isready -h postgres -U \"$POSTGRES_USER\"; do echo 'waiting for postgres...'; sleep 2; done"]
+      containers:
+        - name: worker
+          image: open-terminology-server:local
+          imagePullPolicy: Never
+          command: [celery, -A, ots.worker.celery_app, worker, --loglevel=info, --pool=threads, --concurrency=1]
+          envFrom:
+            - configMapRef: { name: ots-env }
+            - secretRef: { name: ots-secret }
+          volumeMounts:
+            - name: data
+              mountPath: /app/data
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: ots-data }
+---
+# --- Ingress (Traefik routes by Host) ----------------------------------------
+# Public edge (Cloudflare Tunnel -> Traefik) and the tailnet host. Both point
+# at the same api Service; auth is the x-api-key header, enforced by the app.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ots
+  namespace: ots
+spec:
+  rules:
+    - host: ots.rithviknishad.dev
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: ots-api
+                port: { number: 8000 }
+    # Tailnet host: curl -H 'Host: ots.avocado.local' http://avocado/health
+    - host: ots.avocado.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: ots-api
+                port: { number: 8000 }

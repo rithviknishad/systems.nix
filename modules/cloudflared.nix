@@ -81,6 +81,12 @@ in
         # (only the mapped GitHub user gets in), so this host does NOT need a
         # Cloudflare Access app in front. See docs/kite.md.
         "kite.rithviknishad.dev" = "http://localhost:80";
+        # Open Terminology Server (k8s/ots) — public by design: CARE and other
+        # clients call it server-to-server with a shared x-api-key, which the
+        # app enforces on every path except /health and the Swagger assets. So
+        # NO Cloudflare Access gate here (a browser SSO wall would break the
+        # server-to-server calls). See docs/ots.md.
+        "ots.rithviknishad.dev" = "http://localhost:80";
       };
     };
   };

@@ -69,6 +69,7 @@ flowchart LR
             bingo[bingo]
             kite[kite]
             care[care + teleicu]
+            ots[ots api]
         end
     end
 
@@ -83,6 +84,7 @@ flowchart LR
     traefik -->|bingo.rithviknishad.dev| bingo
     traefik -->|kite.rithviknishad.dev| kite
     traefik -->|care*.rithviknishad.dev x5| care
+    traefik -->|ots.rithviknishad.dev| ots
 ```
 
 ### Public routing table
@@ -107,6 +109,7 @@ matched returns `http_status:404`.
 | `care-teleicu-gateway.rithviknishad.dev` | TeleICU `reverse-proxy` | [CARE](care.md) |
 | `care-teleicu-devices.rithviknishad.dev` | TeleICU `teleicu-devices-fe` | [CARE](care.md) |
 | `mock-ptz-camera.rithviknishad.dev` | TeleICU `mock-ptz-camera` (mock UI, `admin`/`admin`) | [CARE](care.md) |
+| `ots.rithviknishad.dev` | OTS `ots-api` (x-api-key gated) | [Terminology Server](ots.md) |
 
 Notes:
 
@@ -122,6 +125,11 @@ Notes:
 - Kite carries its **own GitHub OAuth** login (full cluster-admin console), so
   it is the one public host that does **not** need Cloudflare Access in front;
   see [Kite](kite.md).
+- The Open Terminology Server gates **every** path with a shared API key
+  (`x-api-key` header) except `/health` and the Swagger assets, and is called
+  server-to-server by CARE, so it also does **not** sit behind Cloudflare
+  Access (a browser SSO wall would break those calls); see
+  [Terminology Server](ots.md).
 - The metrics/logs databases (VMSingle, VictoriaLogs) are **deliberately not**
   exposed through the tunnel — reach them over Tailscale.
 
