@@ -21,9 +21,10 @@ the k3s cluster under `k8s/ots/`.
 
 ```mermaid
 flowchart TB
-    user[Browser / CARE / client] -->|"ots.rithviknishad.dev (x-api-key)"| tunnel[cloudflared]
+    user[Browser / client] -->|"ots.rithviknishad.dev (x-api-key)"| tunnel[cloudflared]
     ts[Tailnet client] -->|"ots.avocado.local"| traefik
-    care[CARE pods] -->|"http://ots-api.ots:8000 (x-api-key)"| svc
+    care[CARE pods] -->|"http://ots-fhir-proxy.ots:8080 (no key)"| proxy[ots-fhir-proxy - nginx :8080]
+    proxy -->|"injects x-api-key"| svc
     tunnel --> traefik[Traefik :80]
     traefik --> svc[Service ots-api :8000]
     svc --> api[ots-api - Starlette/uvicorn]
@@ -41,6 +42,7 @@ One upstream image (`open-terminology-server:local`) runs three ways:
 | `ots-api` | Starlette/uvicorn query API on `:8000` (lookup, lexical + vector search, FHIR `$expand`/`$lookup`). An initContainer runs `alembic upgrade head` on start. |
 | `ots-worker` | Celery worker for embedding-population jobs. The broker **and** result backend are Postgres itself — no Redis. |
 | `postgres` | `pgvector/pgvector:pg16`. One denormalized row per concept, plus model-scoped vector tables. |
+| `ots-fhir-proxy` | Tiny `nginx` (`:8080`) that injects the `x-api-key` header and forwards to `ots-api`, so key-less in-cluster clients (CARE) can call the gated FHIR paths without opening them on the public edge. |
 
 The `ots-data` PVC is mounted read-write into both `ots-api` and `ots-worker`
 (single node, so k3s local-path allows the shared RWO mount). It holds imported
@@ -52,7 +54,8 @@ release files under `/app/data/raw/...` and the FastEmbed ONNX model cache.
 |---|---|---|
 | Public | `https://ots.rithviknishad.dev` | `x-api-key` header (app-enforced) |
 | Tailscale | `http://avocado` (Host: `ots.avocado.local`) | tailnet membership + `x-api-key` |
-| In-cluster | `http://ots-api.ots:8000` | `x-api-key` header |
+| In-cluster (direct) | `http://ots-api.ots:8000` | `x-api-key` header |
+| In-cluster (key-injecting proxy) | `http://ots-fhir-proxy.ots:8080` | none — proxy attaches the key |
 
 Every path is gated by the shared API key **except** `OTS_PUBLIC_PATHS`
 (`/health`, `/docs`, `/openapi.json`, `/favicon.ico`). Because the key is the
@@ -60,6 +63,40 @@ only gate and CARE calls it server-to-server, the public host is **not** behind
 Cloudflare Access — a browser SSO wall would break those calls. This mirrors
 Kite (own auth) rather than the auth-less tools (esphome/formance/onvif-console,
 which need Access).
+
+### CARE integration
+
+CARE reaches OTS through **`ots-fhir-proxy`** (`k8s/ots/ots.yaml`), a one-pod
+`nginx` that injects the `x-api-key` header from the sops secret and forwards to
+`ots-api`. This exists because CARE's FHIR client
+([`care/emr/fhir/client.py`](https://github.com/ohcnetwork/care/blob/develop/care/emr/fhir/client.py))
+sends **no** auth header, yet OTS gates every FHIR path — and we don't want to
+open the CPU-heavy `$expand`/`$lookup` operations unauthenticated on the public
+edge. The proxy keeps the key in-cluster (never in CARE's config) while leaving
+the edge key-gated.
+
+CARE points at it via `SNOWSTORM_DEPLOYMENT_URL` in the `care-backend-env`
+ConfigMap (`k8s/care/care.yaml`):
+
+```yaml
+SNOWSTORM_DEPLOYMENT_URL: http://ots-fhir-proxy.ots.svc:8080
+```
+
+CARE builds request URLs as `{SNOWSTORM_DEPLOYMENT_URL}/{resource}/${op}` (e.g.
+`/ValueSet/$expand`, `/CodeSystem/$lookup`), and OTS serves FHIR at the **root**
+(no `/fhir` prefix), so the URL is the proxy base with nothing appended. After
+setting it, roll the backend:
+
+```sh
+just care-deploy
+kubectl -n care rollout restart deploy/care-backend deploy/care-celery-worker deploy/care-celery-beat
+```
+
+> **Compatibility caveat:** OTS implements `/ValueSet/$expand` and
+> `/CodeSystem/$lookup` but **not** `/ValueSet/$validate-code`, which CARE calls
+> when validating a saved code against its value set. Search/autocomplete and
+> lookups work; validate-code flows will error until upstream adds the
+> operation.
 
 Quick check once deployed and DNS is live:
 

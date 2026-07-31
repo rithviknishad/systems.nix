@@ -5,7 +5,8 @@
 #           the box with docker and imported into k3s; see docs/ots.md)
 # Visit:    https://ots.rithviknishad.dev/docs (Swagger; public path, no key)
 #           http://avocado (Host: ots.avocado.local) over Tailscale
-# In-cluster (e.g. CARE):  http://ots-api.ots:8000  (send the x-api-key header)
+# In-cluster (e.g. CARE):  http://ots-fhir-proxy.ots:8080  (key injected for
+#           you) or http://ots-api.ots:8000 direct (you send the x-api-key header)
 #
 # Architecture: a small, read-heavy FHIR-ish terminology API backed by
 # Postgres + pgvector. Upstream ships a single image run three ways:
@@ -236,6 +237,87 @@ spec:
       volumes:
         - name: data
           persistentVolumeClaim: { claimName: ots-data }
+---
+# --- FHIR auth-injecting proxy (for in-cluster clients like CARE) -------------
+# CARE's FHIR client (care/emr/fhir/client.py) sends NO auth header, but OTS
+# gates every FHIR path behind x-api-key. Rather than open $expand/$lookup
+# unauthenticated on the PUBLIC edge (CPU-heavy, abusable), this tiny nginx
+# sits in-cluster, injects the shared key from the sops secret, and forwards
+# to ots-api. CARE points SNOWSTORM_DEPLOYMENT_URL at this Service; the edge
+# stays key-gated. The key is substituted into the config at container start
+# via the official nginx image's envsubst hook (NGINX_ENVSUBST_FILTER limits
+# substitution to OTS_API_KEY so nginx's own $host/$remote_addr survive).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ots-fhir-proxy
+  namespace: ots
+data:
+  default.conf.template: |
+    server {
+      listen 8080;
+      # Keep upstream failures legible rather than masking them as 502s.
+      proxy_intercept_errors off;
+      location / {
+        proxy_pass http://ots-api.ots.svc:8000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        # The whole point: attach the shared key CARE doesn't send itself.
+        proxy_set_header x-api-key "${OTS_API_KEY}";
+      }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ots-fhir-proxy
+  namespace: ots
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: ots-fhir-proxy }
+  template:
+    metadata:
+      labels: { app: ots-fhir-proxy }
+    spec:
+      containers:
+        - name: nginx
+          image: nginx:1.27-alpine
+          env:
+            # Pull ONLY the key out of the secret; do not envFrom the whole
+            # secret (Postgres creds etc. have no business in this pod).
+            - name: OTS_API_KEY
+              valueFrom:
+                secretKeyRef: { name: ots-secret, key: OTS_API_KEY }
+            # Restrict envsubst to OTS_API_KEY; otherwise it would eat nginx's
+            # own runtime vars ($host, $proxy_add_x_forwarded_for, ...).
+            - name: NGINX_ENVSUBST_FILTER
+              value: OTS_API_KEY
+          ports: [{ containerPort: 8080 }]
+          volumeMounts:
+            - name: template
+              mountPath: /etc/nginx/templates
+          readinessProbe:
+            httpGet: { path: /health, port: 8080 }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /health, port: 8080 }
+            initialDelaySeconds: 15
+            periodSeconds: 30
+      volumes:
+        - name: template
+          configMap: { name: ots-fhir-proxy }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ots-fhir-proxy
+  namespace: ots
+spec:
+  selector: { app: ots-fhir-proxy }
+  ports: [{ port: 8080 }]
 ---
 # --- Ingress (Traefik routes by Host) ----------------------------------------
 # Public edge (Cloudflare Tunnel -> Traefik) and the tailnet host. Both point
