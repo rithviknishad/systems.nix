@@ -88,3 +88,13 @@ creation_rules:
       - age:
           - *admin
           - *avocado
+
+  # Attic (Nix binary cache) k8s Secret — the base64 HS256 key atticd uses to
+  # sign/verify access tokens. A full k8s Secret manifest, decrypted at deploy
+  # time on the admin machine (`just attic-deploy`); encrypted to avocado too
+  # for consistency.
+  - path_regex: secrets/attic\.enc\.yaml$
+    key_groups:
+      - age:
+          - *admin
+          - *avocado

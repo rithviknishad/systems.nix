@@ -235,6 +235,21 @@ on a shared data PVC — the box has no GPU. The server boots empty; terminologi
 (SNOMED CT, LOINC, ICD) are imported with its CLI from release files staged on
 the data PVC. Documented on its own [Terminology Server](ots.md) page.
 
+### Attic (Nix binary cache) — `k8s/attic/`
+
+[Attic](https://github.com/zhaofengli/attic), a self-hostable Nix binary cache
+with global dedup + zstd compression. Unlike the OHC services, it uses the
+**upstream image** (`ghcr.io/zhaofengli/attic`) directly — no build-on-box
+step. A single `atticd` (API + garbage collector) is the whole cache: **SQLite**
+plus a **`local`** NAR/chunk store, both on one 50 Gi PVC (no Postgres/MinIO).
+Deployed with kustomize plus a sops-encrypted Secret (`just attic-deploy`).
+Every operation is gated by **JWT tokens** minted with `atticadm`
+(`just attic-token`). It is **not exposed publicly** — there is no Cloudflare
+Tunnel entry; reach it only over Tailscale/LAN at `attic.avocado.local` (or
+in-cluster at `http://atticd.attic.svc:8080`), which also sidesteps the edge's
+~100 MB request-body cap on pushes. Its [uptime probe](monitoring.md) hits the
+token-less in-cluster root route. Documented on its own [Attic](attic.md) page.
+
 ## The monitoring workload
 
 The largest thing on the cluster is the observability stack under

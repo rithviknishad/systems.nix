@@ -1,0 +1,168 @@
+# Attic — self-hostable Nix binary cache on k3s.
+#
+# Deploy:   just attic-deploy      (manifests + sops secret)
+# Token:    just attic-token <sub> (mint a JWT with atticadm inside the pod)
+# Visit:    http://avocado (Host: attic.avocado.local)  over Tailscale / LAN
+#
+# NOT exposed on the public internet — there is no Cloudflare Tunnel entry for
+# it. Reach it only from tailnet devices and the local network (via Traefik's
+# attic.avocado.local host route), the same way as the other *.avocado.local
+# internal services.
+#
+# Architecture: a single `atticd` process (API server + garbage collector) from
+# the upstream image. It is the whole cache — no separate DB/object store here:
+#   database -> SQLite on the data PVC (single node, single writer; Postgres is
+#               upstream's recommendation for multi-replica, which we don't run)
+#   storage  -> "local" backend, also on the data PVC (NAR + chunk store)
+# Global dedup + zstd compression happen server-side as NARs stream in.
+#
+# Auth: every cache operation is gated by a JWT signed with the HS256 secret in
+# the sops Secret (atticd-secret). Tokens are minted with `atticadm make-token`
+# (see docs/attic.md).
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: attic
+---
+# --- atticd configuration (non-secret) ---------------------------------------
+# The HS256 signing secret is NOT here — it comes from the sops Secret via the
+# ATTIC_SERVER_TOKEN_HS256_SECRET_BASE64 env var (see secret.example.yaml).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: atticd-server-toml
+  namespace: attic
+data:
+  server.toml: |
+    listen = "[::]:8080"
+
+    # Left empty (accept any Host header) on purpose: api-endpoint below is
+    # pinned, so there is no Host-based endpoint synthesis to spoof, and this
+    # lets kubelet/Gatus probe by pod IP / in-cluster Service name. Traefik
+    # only routes attic.avocado.local to this Service anyway.
+    allowed-hosts = []
+
+    # Canonical endpoint handed to clients in cache-config responses — the
+    # substituter URL Nix uses to PULL. Points at the tailnet/LAN host (plain
+    # http; Traefik serves :80, no TLS on the internal path). Clients must be
+    # able to resolve attic.avocado.local to the box, same as the other
+    # *.avocado.local services. The trailing slash is required by atticd.
+    api-endpoint = "http://attic.avocado.local/"
+
+    [database]
+    # SQLite on the data PVC. atticd auto-runs migrations at startup.
+    url = "sqlite:///data/server.db?mode=rwc"
+
+    [storage]
+    type = "local"
+    path = "/data/storage"
+
+    # Server-side content-defined chunking for global dedup. These sizes affect
+    # how STORED NARs are split for dedup, not the client's upload request size.
+    [chunking]
+    nar-size-threshold = 65536   # chunk NARs >= 64 KiB
+    min-size = 16384             # 16 KiB
+    avg-size = 65536             # 64 KiB
+    max-size = 262144            # 256 KiB
+
+    [compression]
+    type = "zstd"
+
+    [garbage-collection]
+    # LRU GC runs every 12h; retention is opt-in per cache (default: keep all).
+    interval = "12 hours"
+---
+# --- Data (SQLite DB + local NAR/chunk store) --------------------------------
+# Lands on the k3s local-path storageClass under /var on the rpool STRIPE —
+# no redundancy (see docs/storage.md). A binary cache is reproducible (re-push
+# from source), so this is acceptable; back up if the cache becomes precious.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: atticd-data
+  namespace: attic
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 50Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: atticd
+  namespace: attic
+spec:
+  replicas: 1
+  # Recreate: SQLite + the local store are a single-writer RWO volume; never
+  # let two atticd pods hold the mount at once.
+  strategy: { type: Recreate }
+  selector:
+    matchLabels: { app: atticd }
+  template:
+    metadata:
+      labels: { app: atticd }
+    spec:
+      containers:
+        - name: atticd
+          # Upstream image; tags are commit hashes (this is the toml-1.x tag).
+          image: ghcr.io/zhaofengli/attic:9eda345a743f50999de04f59a170806c3e029eea
+          # Entrypoint is already `atticd`; pass only its flags.
+          args: [-f, /attic/server.toml]
+          env:
+            - name: RUST_LOG
+              value: info
+          envFrom:
+            # Provides ATTIC_SERVER_TOKEN_HS256_SECRET_BASE64.
+            - secretRef: { name: atticd-secret }
+          ports: [{ containerPort: 8080 }]
+          volumeMounts:
+            - name: config
+              mountPath: /attic
+            - name: data
+              mountPath: /data
+          readinessProbe:
+            # GET / returns a 200 placeholder page — proves the axum app is up.
+            httpGet: { path: /, port: 8080 }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /, port: 8080 }
+            initialDelaySeconds: 20
+            periodSeconds: 30
+      volumes:
+        - name: config
+          configMap: { name: atticd-server-toml }
+        - name: data
+          persistentVolumeClaim: { claimName: atticd-data }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: atticd
+  namespace: attic
+spec:
+  selector: { app: atticd }
+  ports: [{ port: 8080 }]
+---
+# --- Ingress (Traefik routes by Host) ----------------------------------------
+# Tailnet / LAN host only — NO public Cloudflare Tunnel entry. Reach it with
+# curl -H 'Host: attic.avocado.local' http://avocado/ , or by resolving
+# attic.avocado.local to the box. Auth is the JWT token, enforced by atticd.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: attic
+  namespace: attic
+spec:
+  rules:
+    - host: attic.avocado.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: atticd
+                port: { number: 8080 }

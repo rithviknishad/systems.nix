@@ -503,3 +503,43 @@ ots-secrets-rekey:
 # login cert (cloudflared tunnel login) on this machine.
 ots-dns:
     cloudflared tunnel route dns avocado ots.rithviknishad.dev
+
+# --- Attic (self-hostable Nix binary cache) ----------------------------------
+# A single `atticd` (API + GC) backed by SQLite + a local NAR/chunk store on one
+# PVC. Public image (ghcr.io/zhaofengli/attic), so no build-on-box step. Gated
+# by JWT tokens minted with atticadm. NOT exposed publicly — reach it only over
+# Tailscale/LAN at http://avocado (Host: attic.avocado.local). See docs/attic.md.
+
+# Deploy/upgrade Attic: kustomize manifests, then the sops-encrypted Secret
+# piped straight into kubectl (plaintext never touches disk). A secret change
+# needs a rollout restart of atticd to be seen.
+attic-deploy:
+    KUBECONFIG={{kubeconfig_path}} kubectl apply -k k8s/attic
+    sops --decrypt secrets/attic.enc.yaml \
+        | KUBECONFIG={{kubeconfig_path}} kubectl apply -f -
+
+# Show the state of the attic namespace.
+attic-status:
+    KUBECONFIG={{kubeconfig_path}} kubectl -n attic get pods,svc,ingress,pvc
+
+# Tail the atticd logs.
+attic-logs:
+    KUBECONFIG={{kubeconfig_path}} kubectl -n attic logs -f deploy/atticd
+
+# Mint an access token with atticadm inside the pod (it reads the same HS256
+# secret from the env; -f points it at the mounted config). `sub` names the
+# token holder; this grants full rights on all caches — narrow the globs for
+# least privilege. e.g. `just attic-token laptop`. Copy the printed token into
+# `attic login`.
+attic-token sub validity="1y":
+    KUBECONFIG={{kubeconfig_path}} kubectl -n attic exec deploy/atticd -- \
+        atticadm make-token -f /attic/server.toml --sub {{sub}} --validity {{validity}} \
+        --pull '*' --push '*' --create-cache '*' --configure-cache '*' \
+        --configure-cache-retention '*' --destroy-cache '*' --delete '*'
+
+# Edit the sops-encrypted Attic secret (the HS256 signing key). Redeploy after.
+attic-secrets:
+    sops secrets/attic.enc.yaml
+
+attic-secrets-rekey:
+    sops updatekeys secrets/attic.enc.yaml

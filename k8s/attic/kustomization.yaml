@@ -1,0 +1,7 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - attic.yaml
+# The `atticd-secret` Secret is NOT listed here — it's applied straight from
+# sops by `just attic-deploy` (sops -d secrets/attic.enc.yaml | kubectl apply
+# -f -). See secret.example.yaml for its shape.

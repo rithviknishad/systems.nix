@@ -289,6 +289,33 @@ data:
         alerts:
           - type: ntfy
 
+      # OTS FHIR auth-injecting proxy (what CARE talks to). Proves the proxy
+      # pod is up and forwarding to ots-api; if this is down, CARE's
+      # terminology lookups (valueset expand / code lookup) break.
+      - name: ots-fhir-proxy
+        group: ohcnetwork/ots
+        url: "http://ots-fhir-proxy.ots.svc:8080/health"
+        interval: 1m
+        conditions:
+          - "[STATUS] == 200"
+        alerts:
+          - type: ntfy
+
+      # --- attic (Nix binary cache) ------------------------------------------
+
+      # atticd liveness in-cluster. GET / returns a 200 placeholder page, which
+      # proves the axum app (and thus the SQLite-backed cache) is up. No token
+      # needed for the root route. Not exposed publicly (tailnet/LAN only), so
+      # there is no public-edge probe here.
+      - name: atticd
+        group: internal
+        url: "http://atticd.attic.svc:8080/"
+        interval: 1m
+        conditions:
+          - "[STATUS] == 200"
+        alerts:
+          - type: ntfy
+
       # --- ohcnetwork/teleicu/cameras (own subgroup: cameras are numerous,
       # site-specific, and physically fragile — kept out of the main
       # ohcnetwork/care rollup so camera flakiness doesn't dilute it). ------
@@ -434,7 +461,7 @@ spec:
         app.kubernetes.io/name: gatus
       annotations:
         # Bump to roll the pod when the config changes.
-        checksum/config: config-v19
+        checksum/config: config-v21
     spec:
       securityContext:
         runAsNonRoot: true
