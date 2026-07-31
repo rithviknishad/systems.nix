@@ -5,6 +5,7 @@
 {
   imports = [
     ./hardware.nix
+    ./aarch64-builder.nix
     ./disko.nix
     ../../modules/base.nix
     ../../modules/ssh.nix
