@@ -22,8 +22,8 @@ the k3s cluster under `k8s/zerodha-kite/`.
 > This instance runs the **full tool set with no exclusions** — it can place,
 > modify, and cancel **real orders and GTTs** on your live Zerodha account. It
 > is deliberately reachable over the **tailnet only** (see exposure below).
-> Anyone who can reach `avocado:30080` and complete a Kite login can trade as
-> you.
+> Anyone who can reach `https://avocado.orthrus-bass.ts.net:8443` and complete a
+> Kite login can trade as you.
 
 ## Architecture
 
@@ -36,8 +36,9 @@ graph TD
     pkg --> img[OCI image zerodha-kite:latest]
     img -->|services.k3s.images<br/>modules/zerodha-kite.nix| ctr[(containerd)]
     ctr --> pod[zerodha-kite pod :8080<br/>APP_MODE=hybrid]
-    npc[NodePort Service :30080] --> pod
-    ts[Tailscale client<br/>MagicDNS 'avocado'] -->|avocado:30080| npc
+    npc[NodePort Service :30080<br/>plain HTTP backend] --> pod
+    serve[tailscale serve --https=8443<br/>Let's Encrypt TLS] -->|http://box:30080| npc
+    ts[Tailscale client browser + MCP<br/>avocado.tailnet.ts.net:8443] -->|HTTPS| serve
 ```
 
 - **Image**: `buildGoModule` compiles the Go binary; `dockerTools.buildLayeredImage`
@@ -51,28 +52,41 @@ graph TD
 - **Mode**: `APP_MODE=hybrid` serves **both** `/mcp` (streamable HTTP) and
   `/sse` (SSE) on port 8080, so any client's preferred transport works.
 
-## Exposure — tailnet only, via NodePort
+## Exposure — tailnet only, HTTPS via Tailscale `serve`
 
-Unlike the other cluster services (Traefik ingress on `*.avocado.local` /
-public Cloudflare hosts), this server is exposed with a fixed **NodePort**
-(`30080`), reachable at **`http://avocado:30080`** over Tailscale MagicDNS.
+The canonical URL is **`https://avocado.orthrus-bass.ts.net:8443`**, reachable
+over the tailnet only, with a real (browser-trusted) Let's Encrypt certificate.
 
-Why a NodePort instead of an ingress:
+How the request path is built:
 
-- The Kite auth flow is **browser-based**. The `login` MCP tool returns
-  `http://avocado:30080/authorize`; after you log in to Kite, your browser is
-  redirected to `http://avocado:30080/callback?request_token=...`. Both the MCP
-  transport and the browser must hit the **same real `host:port`** — a
-  Host-header `*.avocado.local` route can't be followed by a browser OAuth
-  redirect.
-- `tailscale0` is a trusted firewall interface (`modules/tailscale.nix`), but
-  the NodePort range is **not** in the host's `allowedTCPPorts`
-  (`modules/k3s.nix`). So `avocado:30080` is reachable **over the tailnet** and
-  blocked on the WAN/LAN. No public route, no Cloudflare Access gate.
+- The pod speaks **plain HTTP** on a fixed **NodePort** (`30080`). NodePort
+  (not a Traefik ingress) because the browser OAuth callback needs one real
+  `host:port` for both the MCP transport and the redirect — a Host-header
+  `*.avocado.local` route can't be followed by a browser redirect.
+- **Tailscale `serve`** (`modules/zerodha-kite.nix`, a systemd oneshot)
+  terminates TLS with the box's MagicDNS cert and proxies
+  `https://avocado.<tailnet>.ts.net:8443` → `http://<box tailscale IP>:30080`.
+- Port **8443**, not 443, because k3s's klipper svclb already binds host
+  `:80`/`:443` for Traefik (the public ingress). Tailscale `serve` allows HTTPS
+  on 443/8443/10000; 8443 is free, and the Kite console accepts an HTTPS
+  Redirect URL with that explicit port.
 
-`PUBLIC_BASE_URL` (in `k8s/zerodha-kite/zerodha-kite.yaml`), the NodePort, and
-the Kite Connect app's **Redirect URL** must all agree on
-`http://avocado:30080`.
+Why it stays tailnet-only: the MagicDNS name resolves **only inside the
+tailnet**, and the NodePort range is not in the host's `allowedTCPPorts`
+(`modules/k3s.nix`) — so nothing here is reachable on the WAN/LAN. No public
+route, no Cloudflare Access gate. This is deliberate: the server can place
+**real trades**.
+
+Three things must agree: `PUBLIC_BASE_URL` (in
+`k8s/zerodha-kite/zerodha-kite.yaml`), the `tailscale serve` front door
+(`modules/zerodha-kite.nix`), and the Kite Connect app's **Redirect URL** —
+all on `https://avocado.orthrus-bass.ts.net:8443`.
+
+{: .note }
+> Prerequisite: HTTPS certificates must be enabled for the tailnet (Tailscale
+> admin console → DNS → *Enable HTTPS*). This box's cert domain
+> (`avocado.orthrus-bass.ts.net`) is already provisioned. The first HTTPS
+> request after a fresh `serve` may be slow while the cert is minted.
 
 ## One-time setup: create a Kite Connect app
 
@@ -85,7 +99,7 @@ would work too, but self-hosting is the point here):
 2. Set the app's **Redirect URL** to exactly:
 
    ```
-   http://avocado:30080/callback
+   https://avocado.orthrus-bass.ts.net:8443/callback
    ```
 
 3. Copy the **API key** and **API secret** into the sops secret:
@@ -116,11 +130,11 @@ manifests and secret.
 
 ## Connecting a client
 
-Any machine that is **on your tailnet** and resolves `avocado` via MagicDNS can
-connect. The bridge is [`mcp-remote`](https://www.npmjs.com/package/mcp-remote)
-(run through `npx`), which lets stdio-only clients talk to the HTTP/SSE
-endpoint. `--allow-http` is required because the endpoint is plain HTTP on the
-tailnet (the tailnet itself is the encrypted transport).
+Any machine that is **on your tailnet** (and so resolves
+`avocado.orthrus-bass.ts.net`) can connect. The bridge is
+[`mcp-remote`](https://www.npmjs.com/package/mcp-remote) (run through `npx`),
+which lets stdio-only clients talk to the HTTP/SSE endpoint. No `--allow-http`
+is needed — the endpoint is real HTTPS.
 
 ### Claude Desktop
 
@@ -132,7 +146,7 @@ Edit `claude_desktop_config.json` (macOS:
   "mcpServers": {
     "zerodha-kite": {
       "command": "npx",
-      "args": ["mcp-remote", "http://avocado:30080/mcp", "--allow-http"]
+      "args": ["mcp-remote", "https://avocado.orthrus-bass.ts.net:8443/mcp"]
     }
   }
 }
@@ -150,33 +164,33 @@ VS Code (`.vscode/mcp.json` in a workspace, or the global MCP settings):
   "servers": {
     "zerodha-kite": {
       "command": "npx",
-      "args": ["mcp-remote", "http://avocado:30080/mcp", "--allow-http"]
+      "args": ["mcp-remote", "https://avocado.orthrus-bass.ts.net:8443/mcp"]
     }
   }
 }
 ```
 
 Clients that speak streamable HTTP natively can instead point straight at the
-URL `http://avocado:30080/mcp` with no `mcp-remote` wrapper.
+URL `https://avocado.orthrus-bass.ts.net:8443/mcp` with no `mcp-remote`
+wrapper.
 
 ### Logging in (per client, each session)
 
 1. Ask the assistant to run the **`login`** tool. It replies with an
-   `http://avocado:30080/authorize?...` link.
+   `https://avocado.orthrus-bass.ts.net:8443/authorize?...` link.
 2. Open that link **in a browser on a tailnet machine**. It bounces you to the
    Kite login; sign in and authorize.
-3. Kite redirects to `http://avocado:30080/callback` and the session is bound to
-   your MCP client. Now the portfolio/market/order tools work.
+3. Kite redirects to `https://avocado.orthrus-bass.ts.net:8443/callback` and the
+   session is bound to your MCP client. Now the portfolio/market/order tools
+   work.
 
 Sessions are per MCP client and **expire** — re-run `login` when tools start
 returning "session not found".
 
 {: .note }
 > **Not on the tailnet?** Add the client machine to your Tailscale network
-> (`tailscale up`) so it resolves `avocado` and can reach `:30080`. There is no
-> LAN or public fallback by design. If you truly need LAN access, you would
-> have to open the NodePort in `modules/k3s.nix` — don't, unless you understand
-> the exposure.
+> (`tailscale up`) so it resolves the MagicDNS name and can reach `:8443`.
+> There is no LAN or public fallback by design.
 
 ## Updating the server
 
@@ -203,7 +217,7 @@ is active (those are per-client and transient). See [Monitoring](monitoring.md).
 |---|---|
 | `flake.nix` | `kite-mcp-server` input + `zerodha-kite-app` / `zerodha-kite-image` packages |
 | `pkgs/zerodha-kite/default.nix` | `buildGoModule` binary + `dockerTools` OCI image |
-| `modules/zerodha-kite.nix` | preload the image into k3s (`services.k3s.images`) |
+| `modules/zerodha-kite.nix` | preload the image into k3s (`services.k3s.images`) + Tailscale HTTPS `serve` front door on :8443 |
 | `k8s/zerodha-kite/` | namespace, ConfigMap, Deployment, NodePort Service |
 | `secrets/zerodha-kite.enc.yaml` | sops-encrypted `KITE_API_KEY` + `KITE_API_SECRET` |
 | `justfile` | `zerodha-kite-deploy` / `-status` / `-logs` / `-secrets` recipes |

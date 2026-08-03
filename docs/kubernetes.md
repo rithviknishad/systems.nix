@@ -258,16 +258,19 @@ trading API** to AI clients. Built by Nix (`pkgs/zerodha-kite`, `buildGoModule`
 + `dockerTools`) from the pinned `kite-mcp-server` flake input and preloaded
 into k3s via `services.k3s.images` (`modules/zerodha-kite.nix`) during
 `just deploy` — same no-registry pattern as Bingo. Runs in `hybrid` mode
-(serves both `/mcp` and `/sse`). Unlike every other workload it is exposed with
-a fixed **NodePort** (`30080`), reachable **only over the tailnet** at
-`http://avocado:30080` — the browser-based Kite login needs one real
-`host:port` for both the MCP transport and the OAuth callback, and the NodePort
-range is firewalled off the WAN/LAN (trusted only on `tailscale0`). It carries
-the **full trading tool set** (real orders/GTTs), so the tailnet-only exposure
-is the security boundary. `KITE_API_KEY`/`SECRET` come from a sops Secret
-(`just zerodha-kite-deploy`). Named `zerodha-kite` to avoid clashing with the
-Kite dashboard above. Documented on its own
-[Zerodha Kite](zerodha-kite.md) page.
+(serves both `/mcp` and `/sse`). Exposed over the **tailnet only** at
+`https://avocado.orthrus-bass.ts.net:8443`: the pod speaks plain HTTP on a
+fixed **NodePort** (`30080`), and a **Tailscale `serve`** front door
+(`modules/zerodha-kite.nix`) terminates TLS with the box's Let's Encrypt cert
+and proxies to it — HTTPS is required because the Kite Connect **Redirect URL**
+must be https, and the browser OAuth callback needs one real `host:port`. Port
+8443 (not 443) because klipper already owns host `:80`/`:443` for Traefik. The
+MagicDNS name resolves only inside the tailnet and the NodePort is firewalled
+off the WAN/LAN. It carries the **full trading tool set** (real orders/GTTs),
+so the tailnet-only exposure is the security boundary.
+`KITE_API_KEY`/`SECRET` come from a sops Secret (`just zerodha-kite-deploy`).
+Named `zerodha-kite` to avoid clashing with the Kite dashboard above.
+Documented on its own [Zerodha Kite](zerodha-kite.md) page.
 
 ## The monitoring workload
 

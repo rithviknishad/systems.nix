@@ -3,24 +3,27 @@
 #
 # Deploy:   just zerodha-kite-deploy   (kubectl apply -k k8s/zerodha-kite + sops secret)
 # Watch:    kubectl -n zerodha-kite get pods -w
-# Reach:    http://avocado:30080/mcp  (MCP, streamable HTTP)  — TAILNET ONLY
-#           http://avocado:30080/sse  (MCP, SSE transport)
-#           http://avocado:30080/     (status page)
+# Reach:    https://avocado.orthrus-bass.ts.net:8443/mcp  (MCP, streamable HTTP) — TAILNET ONLY
+#           https://avocado.orthrus-bass.ts.net:8443/sse  (MCP, SSE transport)
+#           https://avocado.orthrus-bass.ts.net:8443/     (status page)
 # See docs/zerodha-kite.md for the client setup and the Kite Connect app steps.
 #
-# WHY NodePort and not a Traefik ingress like the other services: the auth flow
-# is BROWSER-based. The `login` tool returns <PUBLIC_BASE_URL>/authorize; after
-# the Kite login the browser is redirected to <PUBLIC_BASE_URL>/callback with a
-# request_token. So the client's browser must reach the server at the exact
-# same host:port as the MCP transport — a Host-header `*.avocado.local` route
-# can't be used by a browser OAuth redirect. A fixed NodePort gives one real
-# URL (avocado:30080) that both the MCP client and the browser hit directly.
+# EXPOSURE — the pod speaks plain HTTP on the NodePort below (30080); Tailscale
+# `serve` (modules/zerodha-kite.nix) terminates TLS with the box's Let's
+# Encrypt cert and proxies https://<magicdns>:8443 -> http://<box>:30080. The
+# HTTPS :8443 URL is the canonical one (the Kite console requires an HTTPS
+# Redirect URL); :30080 is the internal backend.
 #
-# WHY this stays tailnet-only: tailscale0 is a trusted firewall interface
-# (modules/tailscale.nix), but the NodePort range is NOT in the host's
-# allowedTCPPorts (modules/k3s.nix). So the NodePort is reachable over the
-# tailnet (avocado MagicDNS) but blocked on the WAN/LAN — no public exposure,
-# no Cloudflare route. This is deliberate: the server can place REAL trades.
+# WHY the browser needs a real URL: the auth flow is BROWSER-based. The `login`
+# tool returns <PUBLIC_BASE_URL>/authorize; after the Kite login the browser is
+# redirected to <PUBLIC_BASE_URL>/callback with a request_token. So the
+# client's browser must reach the server at the exact same host:port as the MCP
+# transport — hence one canonical HTTPS URL (avocado.<tailnet>.ts.net:8443).
+#
+# WHY this stays tailnet-only: the MagicDNS name resolves only inside the
+# tailnet, and the NodePort range is NOT in the host's allowedTCPPorts
+# (modules/k3s.nix) — reachable over the tailnet, blocked on WAN/LAN. No public
+# route, no Cloudflare gate. Deliberate: the server can place REAL trades.
 #
 # WHY no EXCLUDED_TOOLS: this is a private, single-user instance behind the
 # tailnet, so the full tool set (incl. place/modify/cancel order + GTT) is
@@ -48,10 +51,11 @@ data:
   # Bind all interfaces inside the pod (default is localhost, unreachable from
   # the Service).
   APP_HOST: 0.0.0.0
-  # The public, browser-facing base URL. MUST equal the NodePort URL below, and
-  # MUST match the Redirect URL registered on the Kite Connect app
-  # (<PUBLIC_BASE_URL>/callback). avocado resolves via Tailscale MagicDNS.
-  PUBLIC_BASE_URL: http://avocado:30080
+  # The public, browser-facing base URL. MUST match (a) the Tailscale `serve`
+  # front door in modules/zerodha-kite.nix and (b) the Redirect URL registered
+  # on the Kite Connect app (<PUBLIC_BASE_URL>/callback). The MagicDNS name
+  # resolves via Tailscale; TLS is the box's Let's Encrypt cert.
+  PUBLIC_BASE_URL: https://avocado.orthrus-bass.ts.net:8443
   LOG_LEVEL: info
 ---
 apiVersion: apps/v1
@@ -69,7 +73,7 @@ spec:
       annotations:
         # Bump to roll the pod when the ConfigMap changes (env is not
         # auto-reloaded on ConfigMap edits).
-        checksum/config: config-v1
+        checksum/config: config-v2
     spec:
       containers:
         - name: zerodha-kite
@@ -104,10 +108,10 @@ spec:
         - name: tmp
           emptyDir: {}
 ---
-# NodePort so the server is reachable at avocado:30080 directly (see the header
-# note on why a browser-facing URL is required). 30080 mirrors the container's
-# 8080 for legibility and is fixed so PUBLIC_BASE_URL / the Kite redirect URL
-# stay stable across restarts.
+# NodePort (30080) is the plain-HTTP backend that the Tailscale `serve` front
+# door (modules/zerodha-kite.nix) proxies HTTPS/:8443 to. It is pinned so
+# PUBLIC_BASE_URL / the serve target / the Kite redirect URL stay stable across
+# restarts. 30080 mirrors the container's 8080 for legibility.
 apiVersion: v1
 kind: Service
 metadata:
