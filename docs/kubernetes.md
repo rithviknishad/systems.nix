@@ -250,6 +250,25 @@ in-cluster at `http://atticd.attic.svc:8080`), which also sidesteps the edge's
 ~100 MB request-body cap on pushes. Its [uptime probe](monitoring.md) hits the
 token-less in-cluster root route. Documented on its own [Attic](attic.md) page.
 
+### Zerodha Kite MCP server — `k8s/zerodha-kite/`
+
+[`zerodha/kite-mcp-server`](https://github.com/zerodha/kite-mcp-server), a Go
+[MCP](https://modelcontextprotocol.io) server exposing the **Kite Connect
+trading API** to AI clients. Built by Nix (`pkgs/zerodha-kite`, `buildGoModule`
++ `dockerTools`) from the pinned `kite-mcp-server` flake input and preloaded
+into k3s via `services.k3s.images` (`modules/zerodha-kite.nix`) during
+`just deploy` — same no-registry pattern as Bingo. Runs in `hybrid` mode
+(serves both `/mcp` and `/sse`). Unlike every other workload it is exposed with
+a fixed **NodePort** (`30080`), reachable **only over the tailnet** at
+`http://avocado:30080` — the browser-based Kite login needs one real
+`host:port` for both the MCP transport and the OAuth callback, and the NodePort
+range is firewalled off the WAN/LAN (trusted only on `tailscale0`). It carries
+the **full trading tool set** (real orders/GTTs), so the tailnet-only exposure
+is the security boundary. `KITE_API_KEY`/`SECRET` come from a sops Secret
+(`just zerodha-kite-deploy`). Named `zerodha-kite` to avoid clashing with the
+Kite dashboard above. Documented on its own
+[Zerodha Kite](zerodha-kite.md) page.
+
 ## The monitoring workload
 
 The largest thing on the cluster is the observability stack under

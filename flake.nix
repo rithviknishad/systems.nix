@@ -32,6 +32,17 @@
       url = "github:sonzsara/bingo-app";
       flake = false;
     };
+
+    # Zerodha Kite MCP server — a Go MCP server for the Kite Connect trading
+    # API, deployed on the cluster at avocado:<nodeport> (tailnet only). Pinned
+    # source only (flake = false); built by pkgs/zerodha-kite. Bump: `just
+    # update kite-mcp-server`, then recompute vendorHash in
+    # pkgs/zerodha-kite/default.nix. Named "zerodha-kite" everywhere to avoid
+    # collision with the Kite k8s dashboard (k8s/kite).
+    kite-mcp-server = {
+      url = "github:zerodha/kite-mcp-server";
+      flake = false;
+    };
   };
 
   outputs =
@@ -72,8 +83,9 @@
         modules = [ ./home/rithviknishad ];
       };
 
-      # Buildable packages. `bingo-image` is the OCI tarball k3s preloads
-      # (see modules/bingo.nix); `bingo-app` is the built app on its own.
+      # Buildable packages. `*-image` are the OCI tarballs k3s preloads (see
+      # modules/bingo.nix, modules/zerodha-kite.nix); `*-app` are the built
+      # apps on their own.
       packages = forAllSystems (
         system:
         let
@@ -84,13 +96,19 @@
             # vite 8 needs a recent Node; pin it rather than track the default.
             nodejs = pkgs.nodejs_22;
           };
+          zerodha-kite = pkgs.callPackage ./pkgs/zerodha-kite {
+            src = inputs.kite-mcp-server;
+            version = inputs.kite-mcp-server.shortRev or "dev";
+          };
         in
         {
           bingo-app = bingo.app;
+          zerodha-kite-app = zerodha-kite.app;
         }
         // nixpkgs.lib.optionalAttrs pkgs.stdenv.isLinux {
           # dockerTools images build on Linux only.
           bingo-image = bingo.image;
+          zerodha-kite-image = zerodha-kite.image;
         }
       );
 

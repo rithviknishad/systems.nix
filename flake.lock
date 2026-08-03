@@ -78,6 +78,22 @@
         "type": "github"
       }
     },
+    "kite-mcp-server": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1783683961,
+        "narHash": "sha256-C8jqauAmtKMnvjuL1bqxP1Vt6aJWpYhEmGlrgwDvuhg=",
+        "owner": "zerodha",
+        "repo": "kite-mcp-server",
+        "rev": "5e044dc11c0846794af1a3f1e74bf50701cf44e3",
+        "type": "github"
+      },
+      "original": {
+        "owner": "zerodha",
+        "repo": "kite-mcp-server",
+        "type": "github"
+      }
+    },
     "nix-vm-test": {
       "inputs": {
         "nixpkgs": [
@@ -186,6 +202,7 @@
         "bingo-app": "bingo-app",
         "disko": "disko",
         "home-manager": "home-manager",
+        "kite-mcp-server": "kite-mcp-server",
         "nixos-anywhere": "nixos-anywhere",
         "nixpkgs": "nixpkgs",
         "sops-nix": "sops-nix"

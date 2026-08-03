@@ -6,6 +6,11 @@ nav_order: 15
 
 # Kite (Kubernetes dashboard)
 
+{: .note }
+> Not to be confused with the [Zerodha Kite MCP server](zerodha-kite.md)
+> (`k8s/zerodha-kite`), an unrelated trading-API server. This page is the
+> `kite-org/kite` **Kubernetes dashboard**.
+
 [Kite](https://github.com/kite-org/kite) is a modern Kubernetes dashboard. It
 gives a web view of the cluster resources, live logs, a web terminal, and a
 kubectl console. Kite runs on the k3s cluster under `k8s/kite/`.

@@ -139,6 +139,20 @@ data:
         alerts:
           - type: ntfy
 
+      # Zerodha Kite MCP server (k8s/zerodha-kite) — probe the in-cluster
+      # Service status page (200). The real URL is a tailnet-only NodePort
+      # (avocado:30080), not reachable from the cluster's DNS by that name, so
+      # probe the Service. This only proves the server is up, not that a Kite
+      # login session is active (sessions are per-MCP-client and expire).
+      - name: zerodha-kite
+        group: internal
+        url: "http://zerodha-kite.zerodha-kite.svc:8080/"
+        interval: 1m
+        conditions:
+          - "[STATUS] == 200"
+        alerts:
+          - type: ntfy
+
       # --- Public endpoints (reachability + TLS expiry) ----------------------
       - name: rithviknishad.dev
         group: public
@@ -461,7 +475,7 @@ spec:
         app.kubernetes.io/name: gatus
       annotations:
         # Bump to roll the pod when the config changes.
-        checksum/config: config-v21
+        checksum/config: config-v22
     spec:
       securityContext:
         runAsNonRoot: true

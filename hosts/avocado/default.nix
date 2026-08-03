@@ -20,6 +20,7 @@
     ../../modules/docker.nix
     ../../modules/esphome.nix
     ../../modules/bingo.nix
+    ../../modules/zerodha-kite.nix
     ../../users/rithviknishad.nix
   ];
 

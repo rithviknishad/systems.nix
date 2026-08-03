@@ -238,6 +238,42 @@ kite-secrets:
 kite-secrets-rekey:
     sops updatekeys secrets/kite.enc.yaml
 
+# --- Zerodha Kite MCP server (trading API for AI clients) ---------------------
+# A Go MCP server (github:zerodha/kite-mcp-server) exposing the Kite Connect
+# trading API. The image is built by Nix (pkgs/zerodha-kite, from the pinned
+# `kite-mcp-server` flake input) and preloaded into k3s via services.k3s.images
+# (modules/zerodha-kite.nix) during `just deploy` — no registry. Reached at
+# http://avocado:30080 over the tailnet only (NodePort; see docs/zerodha-kite.md).
+# Named "zerodha-kite" to avoid clashing with the Kite k8s dashboard above.
+
+# Deploy/upgrade the Kite MCP server: kustomize manifests, then the
+# sops-encrypted k8s Secret (KITE_API_KEY/SECRET) piped straight into kubectl
+# (plaintext never touches disk). Ends with a rollout restart so the pod picks
+# up the new secret/config. NOTE: the image lands on the box via `just deploy`
+# (k3s preload), not here.
+zerodha-kite-deploy:
+    KUBECONFIG={{kubeconfig_path}} kubectl apply -k k8s/zerodha-kite
+    sops --decrypt secrets/zerodha-kite.enc.yaml \
+        | KUBECONFIG={{kubeconfig_path}} kubectl apply -f -
+    KUBECONFIG={{kubeconfig_path}} kubectl -n zerodha-kite rollout restart deploy/zerodha-kite
+
+# Show the state of the zerodha-kite namespace.
+zerodha-kite-status:
+    KUBECONFIG={{kubeconfig_path}} kubectl -n zerodha-kite get pods,svc
+
+# Tail the Kite MCP server logs.
+zerodha-kite-logs:
+    KUBECONFIG={{kubeconfig_path}} kubectl -n zerodha-kite logs -f deploy/zerodha-kite
+
+# Edit the sops-encrypted Kite MCP secret (KITE_API_KEY + KITE_API_SECRET of
+# your Kite Connect app). Redeploy after to apply.
+zerodha-kite-secrets:
+    sops secrets/zerodha-kite.enc.yaml
+
+# Re-encrypt the Kite MCP secret after changing recipients in .sops.yaml.
+zerodha-kite-secrets-rekey:
+    sops updatekeys secrets/zerodha-kite.enc.yaml
+
 # --- Bingo (boardgame.io multiplayer party game) -----------------------------
 # Single-origin app: server.cjs (Koa) serves the built SPA *and* the
 # boardgame.io multiplayer API/websocket on :8000. The image is built by Nix

@@ -98,3 +98,13 @@ creation_rules:
       - age:
           - *admin
           - *avocado
+
+  # Zerodha Kite MCP server k8s Secret (KITE_API_KEY + KITE_API_SECRET of the
+  # Kite Connect app). A full k8s Secret manifest, decrypted at deploy time on
+  # the admin machine (`just zerodha-kite-deploy`); encrypted to avocado too
+  # for consistency.
+  - path_regex: secrets/zerodha-kite\.enc\.yaml$
+    key_groups:
+      - age:
+          - *admin
+          - *avocado
