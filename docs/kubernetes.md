@@ -276,8 +276,10 @@ Documented on its own [Zerodha Kite](zerodha-kite.md) page.
 
 [`rithviknishad/settle-up-mcp`](https://github.com/rithviknishad/settle-up-mcp),
 a FastMCP (Python) [MCP](https://modelcontextprotocol.io) server exposing
-**Settle Up shared expenses** (groups, members, expenses, balances — plus
-adding expenses) to AI clients. Unlike the Kite MCP server above it is **not**
+**Settle Up shared expenses** to AI clients — 26 tools spanning groups, members,
+transactions, balances, recurring templates and the change log, including
+**destructive** ones (delete group/transaction/recurring, each gated by a
+required `confirm` flag). Unlike the Kite MCP server above it is **not**
 Nix-built: it is a first-party repo whose CI publishes a multi-arch image to
 GHCR, so the pod pulls `ghcr.io/rithviknishad/settle-up-mcp:latest` with
 `imagePullPolicy: Always` and `just settle-up-mcp-deploy` is the entire upgrade
@@ -288,8 +290,9 @@ token in git. Exposed over the **tailnet only** at
 `https://avocado.orthrus-bass.ts.net:10000` via the same NodePort
 (`30800`) + **Tailscale `serve`** pattern as Kite — port 10000 because it is the
 last of the three HTTPS ports `serve` allows (klipper owns `:443`, Kite took
-`:8443`). Tailnet-only is the security boundary: it is pointed at the **live**
-Settle Up backend, can write real expenses, and holds the account password.
+tailnet-only is the security boundary: it is pointed at the **live**
+Settle Up backend, can delete real groups and transactions, and holds the
+account password.
 Documented on its own [Settle Up](settle-up-mcp.md) page.
 
 ## The monitoring workload

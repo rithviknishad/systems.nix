@@ -1,6 +1,12 @@
 # Settle Up MCP server on k3s — a Model Context Protocol server that gives AI
-# clients (Claude, VS Code, Cursor, ...) access to Settle Up shared-expense data
-# (groups, members, expenses, balances) and can ADD new expenses.
+# clients (Claude, VS Code, Cursor, ...) full read/write access to Settle Up
+# shared-expense data — groups, members, transactions, balances, recurring
+# templates and the change log (26 tools as of image sha-d84c69d8).
+#
+# The tool set is DESTRUCTIVE: it can delete groups, transactions and recurring
+# templates (each gated by a required `confirm` boolean), deactivate members,
+# change a group's currency and mint invite links. That guardrail stops
+# accidents, not attackers — anyone holding the bearer token can set confirm.
 #
 # Deploy:   just settle-up-mcp-deploy   (kubectl apply -k + sops secret + roll)
 # Watch:    kubectl -n settle-up-mcp get pods -w
@@ -21,7 +27,8 @@
 # MagicDNS name resolves only inside the tailnet and the NodePort range is not
 # in the host's allowedTCPPorts (modules/k3s.nix), so it is unreachable on
 # WAN/LAN. Deliberate — this server reads personal financial data, holds a
-# Settle Up account password, and can write expenses. HTTPS (not plain
+# Settle Up account password, and can delete groups and transactions. HTTPS
+# (not plain
 # NodePort) because MCP clients otherwise need --allow-http, and the bearer
 # token would cross the tailnet in the clear.
 #

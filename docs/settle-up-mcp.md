@@ -8,25 +8,83 @@ nav_order: 19
 
 [`rithviknishad/settle-up-mcp`](https://github.com/rithviknishad/settle-up-mcp)
 is a [Model Context Protocol](https://modelcontextprotocol.io) server that gives
-AI clients (Claude, VS Code, Cursor, ...) access to your
+AI clients (Claude, VS Code, Cursor, ...) full read **and write** access to your
 [Settle Up](https://settleup.io) shared-expense data — groups, members,
-expenses, and balances — and can **add new expenses**. It runs on the k3s
-cluster under `k8s/settle-up-mcp/`.
+transactions, balances, recurring templates, and the change log. It runs on the
+k3s cluster under `k8s/settle-up-mcp/` and currently exposes **26 tools**.
+
+### Groups
 
 | Tool | Action | Read-only |
 |---|---|---|
 | `settleup_list_groups` | Your groups | Yes |
-| `settleup_list_members` | Members of a group | Yes |
-| `settleup_list_expenses` | Transactions of a group | Yes |
+| `settleup_get_group` | Settings + counts for one group | Yes |
 | `settleup_get_balances` | Who owes what in a group | Yes |
+| `settleup_create_group` | Create a group and add yourself | **No** |
+| `settleup_update_group` | Change the name or settings | **No** |
+| `settleup_get_invite_link` | Get the link that invites a person | **No** |
+| `settleup_change_currency` | Change the group currency | **No** |
+| `settleup_delete_group` | Delete a group — needs `confirm` | **No** |
+
+### Members
+
+| Tool | Action | Read-only |
+|---|---|---|
+| `settleup_list_members` | Members of a group | Yes |
+| `settleup_add_member` | Add a person to a group | **No** |
+| `settleup_update_member` | Change a member | **No** |
+| `settleup_deactivate_member` | Set a member inactive | **No** |
+
+### Transactions
+
+| Tool | Action | Read-only |
+|---|---|---|
+| `settleup_list_expenses` | Transactions of a group | Yes |
+| `settleup_get_expense` | Full detail of one transaction | Yes |
+| `settleup_summarize_spending` | Totals by category, member, or month | Yes |
 | `settleup_add_expense` | Add a new expense | **No** |
+| `settleup_add_transfer` | Record a payment between two members | **No** |
+| `settleup_update_expense` | Change a transaction | **No** |
+| `settleup_delete_expense` | Delete a transaction — needs `confirm` | **No** |
+
+### Recurring transactions
+
+| Tool | Action | Read-only |
+|---|---|---|
+| `settleup_list_recurring` | Transaction templates | Yes |
+| `settleup_add_recurring` | Add a template | **No** |
+| `settleup_delete_recurring` | Delete a template — needs `confirm` | **No** |
+
+### History and access
+
+| Tool | Action | Read-only |
+|---|---|---|
+| `settleup_list_changes` | Change log of a group | Yes |
+| `settleup_list_categories` | Custom categories | Yes |
+| `settleup_list_permissions` | Who can access a group | Yes |
+| `settleup_recalculate_debts` | Ask the server to recompute debts | **No** |
+
+Every tool takes a single nested `request` object (e.g.
+`{"request": {"group_id": "..."}}`), and ids are discovered by listing first —
+`settleup_list_groups` → `group_id`, `settleup_list_expenses` →
+`transaction_id`. List responses are paginated: alongside the records they carry
+`count`, `total`, `limit`, `offset`, and `has_more`.
 
 {: .warning }
-> This instance is pointed at the **live** Settle Up backend, not the sandbox.
-> `settleup_add_expense` writes to your real groups, and the pod holds your real
-> Settle Up **account password** (the server signs in with Firebase
-> email/password auth). It is deliberately reachable over the **tailnet only** —
-> see [Exposure](#exposure--tailnet-only-https-via-tailscale-serve).
+> This instance is pointed at the **live** Settle Up backend, not the sandbox,
+> and the tool set is **destructive**: it can delete groups, transactions, and
+> recurring templates, deactivate members, change a group's currency, and mint
+> invite links. The pod also holds your real Settle Up **account password** (the
+> server signs in with Firebase email/password auth). It is deliberately
+> reachable over the **tailnet only** — see
+> [Exposure](#exposure--tailnet-only-https-via-tailscale-serve).
+
+{: .note }
+> **The `confirm` guardrail.** The three delete tools take a `confirm` boolean
+> that is *required* in their schema, so a client cannot delete anything by
+> omitting it — the model has to consciously pass `confirm: true`. Treat that as
+> a guard against accidents, **not** as a security boundary: any client holding
+> the bearer token can set it. The tailnet-only exposure is the real boundary.
 
 ## Architecture
 

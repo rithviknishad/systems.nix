@@ -276,7 +276,8 @@ zerodha-kite-secrets-rekey:
 
 # --- Settle Up MCP server (shared expenses for AI clients) -------------------
 # A FastMCP (Python) server from our own repo github:rithviknishad/settle-up-mcp
-# exposing Settle Up groups/members/expenses/balances, plus adding expenses.
+# exposing Settle Up groups/members/transactions/balances/recurring templates as
+# 26 read AND write tools — including deletes (gated by a required `confirm`).
 # Unlike zerodha-kite it is NOT Nix-built: the upstream repo publishes a
 # multi-arch image to GHCR on every push to main, and the pod tracks `:latest`
 # with imagePullPolicy: Always — so `settle-up-mcp-deploy` alone is the whole
