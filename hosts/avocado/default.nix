@@ -21,6 +21,7 @@
     ../../modules/esphome.nix
     ../../modules/bingo.nix
     ../../modules/zerodha-kite.nix
+    ../../modules/settle-up-mcp.nix
     ../../users/rithviknishad.nix
   ];
 

@@ -1,0 +1,151 @@
+# Settle Up MCP server on k3s — a Model Context Protocol server that gives AI
+# clients (Claude, VS Code, Cursor, ...) access to Settle Up shared-expense data
+# (groups, members, expenses, balances) and can ADD new expenses.
+#
+# Deploy:   just settle-up-mcp-deploy   (kubectl apply -k + sops secret + roll)
+# Watch:    kubectl -n settle-up-mcp get pods -w
+# Reach:    https://avocado.orthrus-bass.ts.net:10000/mcp     — TAILNET ONLY
+#           https://avocado.orthrus-bass.ts.net:10000/health  (unauthenticated)
+# See docs/settle-up-mcp.md for client setup and the credential steps.
+#
+# IMAGE — unlike zerodha-kite (Nix-built + preloaded), this is our own upstream
+# repo (github:rithviknishad/settle-up-mcp) publishing a multi-arch image to
+# GHCR on every push to main. We track `:latest` with imagePullPolicy: Always
+# deliberately: it is a first-party image, so a `rollout restart` is the whole
+# upgrade path — no flake input, no vendorHash, no `just deploy` needed.
+#
+# EXPOSURE — same shape as zerodha-kite (docs/zerodha-kite.md): the pod speaks
+# plain HTTP on the pinned NodePort below, and Tailscale `serve`
+# (modules/settle-up-mcp.nix) terminates TLS with the box's Let's Encrypt cert,
+# proxying https://<magicdns>:10000 -> http://<box>:30800. Tailnet-only: the
+# MagicDNS name resolves only inside the tailnet and the NodePort range is not
+# in the host's allowedTCPPorts (modules/k3s.nix), so it is unreachable on
+# WAN/LAN. Deliberate — this server reads personal financial data, holds a
+# Settle Up account password, and can write expenses. HTTPS (not plain
+# NodePort) because MCP clients otherwise need --allow-http, and the bearer
+# token would cross the tailnet in the clear.
+#
+# WHY port 10000: `tailscale serve` only allows HTTPS on 443, 8443 or 10000.
+# klipper svclb owns host :443 for Traefik and zerodha-kite already took :8443,
+# so 10000 is the last one free. Adding a third tailnet HTTPS service will need
+# a different approach (e.g. path-based serve routes under one port).
+#
+# AUTH — every /mcp request must carry `Authorization: Bearer <MCP_AUTH_TOKEN>`
+# (FastMCP StaticTokenVerifier). If MCP_AUTH_TOKEN is empty the server accepts
+# EVERY request, so the sops secret must always carry a real value. /health is
+# registered as a FastMCP custom_route and therefore sits OUTSIDE the auth
+# middleware — which is what lets kubelet probes and Gatus check liveness
+# without a token ever landing in this repo.
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: settle-up-mcp
+---
+# Non-secret configuration. The Settle Up credentials, the Firebase API key and
+# the MCP bearer token are the only secrets; they live in the sops-backed
+# `settle-up-mcp-secret` (applied by `just settle-up-mcp-deploy`).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: settle-up-mcp-env
+  namespace: settle-up-mcp
+data:
+  # LIVE Settle Up backend (the app's default is the sandbox). The Firebase API
+  # key in the secret MUST be the live one — sandbox and live are separate
+  # Firebase projects with different keys, and mixing them fails at sign-in.
+  SETTLEUP_BASE_URL: https://settle-up-live.firebaseio.com
+  # Bind all interfaces inside the pod so the Service can reach it.
+  MCP_HOST: 0.0.0.0
+  MCP_PORT: "8000"
+  # Streamable HTTP transport path. This server does NOT serve SSE (upstream
+  # runs transport="http" only), so clients must speak streamable HTTP.
+  MCP_PATH: /mcp
+  LOG_LEVEL: INFO
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: settle-up-mcp
+  namespace: settle-up-mcp
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: settle-up-mcp }
+  template:
+    metadata:
+      labels: { app: settle-up-mcp }
+      annotations:
+        # Bump to roll the pod when the ConfigMap changes (env is not
+        # auto-reloaded on ConfigMap edits).
+        checksum/config: config-v1
+    spec:
+      securityContext:
+        # The image creates and runs as uid 10001 (appuser); assert it here so
+        # a bad image rebuild that reverts to root fails to start instead of
+        # silently gaining privileges.
+        runAsNonRoot: true
+        runAsUser: 10001
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: settle-up-mcp
+          image: ghcr.io/rithviknishad/settle-up-mcp:latest
+          # Always: `:latest` is a moving tag on a first-party image, so every
+          # pod roll must re-pull rather than reuse whatever containerd cached.
+          imagePullPolicy: Always
+          securityContext:
+            # Mirrors the upstream docker-compose hardening (read_only,
+            # no-new-privileges). The app only reads its code + writes logs to
+            # stdout; PYTHONDONTWRITEBYTECODE=1 in the image keeps it from
+            # writing .pyc files next to the source.
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities: { drop: [ALL] }
+          ports: [{ containerPort: 8000 }]
+          envFrom:
+            # Non-secret config first, then the sops secret (Settle Up
+            # credentials + Firebase key + MCP bearer token). The secret is
+            # applied by `just settle-up-mcp-deploy`, not by kustomize.
+            - configMapRef: { name: settle-up-mcp-env }
+            - secretRef: { name: settle-up-mcp-secret }
+          # /health is token-less by design (see the header note), so probes
+          # need no credentials. It reports 200 as soon as the transport is up;
+          # `signed_in` in the body only flips once a tool has actually talked
+          # to Settle Up, so it is NOT a readiness signal.
+          readinessProbe:
+            httpGet: { path: /health, port: 8000 }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /health, port: 8000 }
+            initialDelaySeconds: 15
+            periodSeconds: 30
+          resources:
+            requests: { cpu: "25m", memory: "128Mi" }
+            limits: { cpu: "500m", memory: "512Mi" }
+          volumeMounts:
+            # readOnlyRootFilesystem leaves no writable scratch space; httpx and
+            # the Python runtime expect a usable /tmp.
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+# NodePort (30800) is the plain-HTTP backend that the Tailscale `serve` front
+# door (modules/settle-up-mcp.nix) proxies HTTPS/:10000 to. Pinned so the serve
+# target stays stable across restarts; 30800 mirrors the container's 8000 for
+# legibility (30080 is taken by zerodha-kite).
+apiVersion: v1
+kind: Service
+metadata:
+  name: settle-up-mcp
+  namespace: settle-up-mcp
+spec:
+  type: NodePort
+  selector: { app: settle-up-mcp }
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000
+      nodePort: 30800

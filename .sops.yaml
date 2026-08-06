@@ -108,3 +108,13 @@ creation_rules:
       - age:
           - *admin
           - *avocado
+
+  # Settle Up MCP server k8s Secret (Settle Up account email + password, the
+  # live Firebase Web API key, and the MCP bearer token clients must send). A
+  # full k8s Secret manifest, decrypted at deploy time on the admin machine
+  # (`just settle-up-mcp-deploy`); encrypted to avocado too for consistency.
+  - path_regex: secrets/settle-up-mcp\.enc\.yaml$
+    key_groups:
+      - age:
+          - *admin
+          - *avocado

@@ -41,6 +41,28 @@ The box is reachable at the MagicDNS name **`avocado`**, which is what the
 the recommended path for `kubectl`, Lens, SSH, and hitting internal-only
 services.
 
+### Tailnet-only HTTPS (`tailscale serve`)
+
+Two services are published to the tailnet with a real Let's Encrypt certificate
+instead of through Traefik/the tunnel. Each is a systemd oneshot re-asserting
+`tailscale serve --bg`, terminating TLS on the box's MagicDNS name and proxying
+to a pinned k8s **NodePort**:
+
+| URL | → NodePort | Service | Module |
+|---|---|---|---|
+| `https://avocado.<tailnet>.ts.net:8443` | `30080` | [Zerodha Kite MCP](zerodha-kite.md) | `modules/zerodha-kite.nix` |
+| `https://avocado.<tailnet>.ts.net:10000` | `30800` | [Settle Up MCP](settle-up-mcp.md) | `modules/settle-up-mcp.nix` |
+
+Both stay private: the MagicDNS name resolves only inside the tailnet, and the
+NodePort range is deliberately **not** in `allowedTCPPorts` above, so the
+backends are unreachable from the LAN/WAN.
+
+{: .note }
+> **These two ports are the whole budget.** `tailscale serve` only allows HTTPS
+> on **443**, **8443**, and **10000** — and `:443` is already taken by k3s's
+> klipper svclb for Traefik. A third tailnet HTTPS service must share an
+> existing port via path-based `serve` routes.
+
 ## Cloudflare Tunnel (public access)
 
 `modules/cloudflared.nix` runs a named tunnel

@@ -153,6 +153,24 @@ data:
         alerts:
           - type: ntfy
 
+      # Settle Up MCP server (k8s/settle-up-mcp) — probe the in-cluster Service
+      # /health route. The real URL is a tailnet-only NodePort behind Tailscale
+      # serve (avocado.<tailnet>:10000), not resolvable from cluster DNS, so
+      # probe the Service. /health is the ONLY token-less route on this server
+      # (FastMCP custom_route, outside the bearer-auth middleware) — which is
+      # what keeps the MCP_AUTH_TOKEN out of this ConfigMap. `signed_in` in the
+      # body is deliberately NOT asserted: it only flips once a tool has talked
+      # to Settle Up, so it would flap on every pod restart.
+      - name: settle-up-mcp
+        group: internal
+        url: "http://settle-up-mcp.settle-up-mcp.svc:8000/health"
+        interval: 1m
+        conditions:
+          - "[STATUS] == 200"
+          - "[BODY].status == ok"
+        alerts:
+          - type: ntfy
+
       # --- Public endpoints (reachability + TLS expiry) ----------------------
       - name: rithviknishad.dev
         group: public
@@ -475,7 +493,7 @@ spec:
         app.kubernetes.io/name: gatus
       annotations:
         # Bump to roll the pod when the config changes.
-        checksum/config: config-v22
+        checksum/config: config-v23
     spec:
       securityContext:
         runAsNonRoot: true

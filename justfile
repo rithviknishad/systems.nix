@@ -274,6 +274,43 @@ zerodha-kite-secrets:
 zerodha-kite-secrets-rekey:
     sops updatekeys secrets/zerodha-kite.enc.yaml
 
+# --- Settle Up MCP server (shared expenses for AI clients) -------------------
+# A FastMCP (Python) server from our own repo github:rithviknishad/settle-up-mcp
+# exposing Settle Up groups/members/expenses/balances, plus adding expenses.
+# Unlike zerodha-kite it is NOT Nix-built: the upstream repo publishes a
+# multi-arch image to GHCR on every push to main, and the pod tracks `:latest`
+# with imagePullPolicy: Always — so `settle-up-mcp-deploy` alone is the whole
+# upgrade path (no `just deploy`, no flake input). Reached over the tailnet only
+# at https://avocado.orthrus-bass.ts.net:10000/mcp (see docs/settle-up-mcp.md).
+
+# Deploy/upgrade the Settle Up MCP server: kustomize manifests, then the
+# sops-encrypted k8s Secret (Settle Up credentials + Firebase key + MCP bearer
+# token) piped straight into kubectl (plaintext never touches disk). Ends with a
+# rollout restart, which also re-pulls `:latest` — run this alone to pick up a
+# new upstream build.
+settle-up-mcp-deploy:
+    KUBECONFIG={{kubeconfig_path}} kubectl apply -k k8s/settle-up-mcp
+    sops --decrypt secrets/settle-up-mcp.enc.yaml \
+        | KUBECONFIG={{kubeconfig_path}} kubectl apply -f -
+    KUBECONFIG={{kubeconfig_path}} kubectl -n settle-up-mcp rollout restart deploy/settle-up-mcp
+
+# Show the state of the settle-up-mcp namespace.
+settle-up-mcp-status:
+    KUBECONFIG={{kubeconfig_path}} kubectl -n settle-up-mcp get pods,svc
+
+# Tail the Settle Up MCP server logs.
+settle-up-mcp-logs:
+    KUBECONFIG={{kubeconfig_path}} kubectl -n settle-up-mcp logs -f deploy/settle-up-mcp
+
+# Edit the sops-encrypted Settle Up MCP secret (account email/password, live
+# Firebase Web API key, MCP bearer token). Redeploy after to apply.
+settle-up-mcp-secrets:
+    sops secrets/settle-up-mcp.enc.yaml
+
+# Re-encrypt the Settle Up MCP secret after changing recipients in .sops.yaml.
+settle-up-mcp-secrets-rekey:
+    sops updatekeys secrets/settle-up-mcp.enc.yaml
+
 # --- Bingo (boardgame.io multiplayer party game) -----------------------------
 # Single-origin app: server.cjs (Koa) serves the built SPA *and* the
 # boardgame.io multiplayer API/websocket on :8000. The image is built by Nix
