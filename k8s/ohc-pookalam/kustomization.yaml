@@ -1,0 +1,7 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ohc-pookalam.yaml
+# The `ohc-pookalam-secret` Secret is NOT listed here — it's applied straight
+# from sops by `just ohc-pookalam-deploy` (sops -d secrets/ohc-pookalam.enc.yaml
+# | kubectl apply -f -). See secret.example.yaml for its shape.

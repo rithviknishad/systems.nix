@@ -348,6 +348,64 @@ data:
         alerts:
           - type: ntfy
 
+      # --- ntfy (self-hosted notification server) ----------------------------
+      # NOTE: these alerts still go to ntfy.sh (see the `alerting` block above),
+      # not to the self-hosted server — so a dead ntfy can still page us.
+      # Keep it that way if the alerting target is ever migrated.
+
+      # ntfy liveness in-cluster. /v1/health is unauthenticated even under
+      # auth-default-access: deny-all, so no token is needed here.
+      - name: ntfy
+        group: internal
+        url: "http://ntfy.ntfy.svc:8080/v1/health"
+        interval: 1m
+        conditions:
+          - "[STATUS] == 200"
+          - "[BODY].healthy == true"
+        alerts:
+          - type: ntfy
+
+      # ntfy public edge — measures the full edge->tunnel->Traefik->pod path
+      # plus cert expiry. This is the path phones and scripts actually use.
+      - name: ntfy.rithviknishad.dev
+        group: public
+        url: "https://ntfy.rithviknishad.dev/v1/health"
+        interval: 5m
+        conditions:
+          - "[STATUS] == 200"
+          - "[BODY].healthy == true"
+          - "[CERTIFICATE_EXPIRATION] > 240h"
+        alerts:
+          - type: ntfy
+
+      # --- ohc-pookalam (Onam Pookalam vote site) ----------------------------
+
+      # In-cluster liveness. The app has no dedicated health route, so / is the
+      # probe: a 200 means Next.js is serving AND it could open the SQLite file
+      # (the gallery page reads vote counts on render). Probed via the Service
+      # so a Cloudflare/tunnel outage doesn't masquerade as a dead app.
+      - name: ohc-pookalam
+        group: internal
+        url: "http://ohc-pookalam.ohc-pookalam.svc:3000/"
+        interval: 1m
+        conditions:
+          - "[STATUS] == 200"
+        alerts:
+          - type: ntfy
+
+      # Public edge — measures the full edge->tunnel->Traefik->pod path plus
+      # cert expiry. The host is deliberately NOT Access-gated, so this is a
+      # clean 200 rather than a login redirect.
+      - name: ohc-pookalam.rithviknishad.dev
+        group: public
+        url: "https://ohc-pookalam.rithviknishad.dev/"
+        interval: 5m
+        conditions:
+          - "[STATUS] == 200"
+          - "[CERTIFICATE_EXPIRATION] > 240h"
+        alerts:
+          - type: ntfy
+
       # --- ohcnetwork/teleicu/cameras (own subgroup: cameras are numerous,
       # site-specific, and physically fragile — kept out of the main
       # ohcnetwork/care rollup so camera flakiness doesn't dilute it). ------
@@ -399,6 +457,15 @@ data:
       - name: prama-cctv
         group: ohcnetwork/teleicu/cameras
         url: "tcp://192.168.165.121:554"
+        interval: 5m
+        conditions:
+          - "[CONNECTED] == true"
+        alerts:
+          - type: ntfy
+
+      - name: cpplus-cctv
+        group: ohcnetwork/teleicu/cameras
+        url: "tcp://192.168.165.40:554"
         interval: 5m
         conditions:
           - "[CONNECTED] == true"
@@ -493,7 +560,10 @@ spec:
         app.kubernetes.io/name: gatus
       annotations:
         # Bump to roll the pod when the config changes.
-        checksum/config: config-v23
+        # v26 was applied to the cluster as "HEAD + cpplus-cctv" only (the ntfy
+        # probes below are staged but their service isn't deployed yet), so this
+        # file must carry a HIGHER value or a full deploy won't roll the pod.
+        checksum/config: config-v27
     spec:
       securityContext:
         runAsNonRoot: true

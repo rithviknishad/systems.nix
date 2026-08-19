@@ -109,6 +109,27 @@ creation_rules:
           - *admin
           - *avocado
 
+  # ntfy (self-hosted notification server) k8s Secret — the declarative auth
+  # model: NTFY_AUTH_USERS (bcrypt hashes), NTFY_AUTH_ACCESS (topic ACLs) and
+  # NTFY_AUTH_TOKENS (bearer tokens). A full k8s Secret manifest, decrypted at
+  # deploy time on the admin machine (`just ntfy-deploy`); encrypted to avocado
+  # too for consistency.
+  - path_regex: secrets/ntfy\.enc\.yaml$
+    key_groups:
+      - age:
+          - *admin
+          - *avocado
+
+  # Onam Pookalam Vote k8s Secret — just GITHUB_TOKEN, a scope-less PAT that
+  # lifts the api.github.com username-lookup rate limit from 60/h to 5000/h.
+  # A full k8s Secret manifest, decrypted at deploy time on the admin machine
+  # (`just ohc-pookalam-deploy`); encrypted to avocado too for consistency.
+  - path_regex: secrets/ohc-pookalam\.enc\.yaml$
+    key_groups:
+      - age:
+          - *admin
+          - *avocado
+
   # Settle Up MCP server k8s Secret (Settle Up account email + password, the
   # live Firebase Web API key, and the MCP bearer token clients must send). A
   # full k8s Secret manifest, decrypted at deploy time on the admin machine

@@ -87,6 +87,19 @@ in
         # NO Cloudflare Access gate here (a browser SSO wall would break the
         # server-to-server calls). See docs/ots.md.
         "ots.rithviknishad.dev" = "http://localhost:80";
+        # Onam Pookalam Vote (k8s/ohc-pookalam) — public by design: the whole
+        # point is that anyone in the community can open the link and vote.
+        # The app has its own (trust-based) GitHub username sign-in, so NO
+        # Cloudflare Access gate — an SSO wall would defeat the purpose.
+        # See docs/ohc-pookalam.md.
+        "ohc-pookalam.rithviknishad.dev" = "http://localhost:80";
+        # ntfy (k8s/ntfy) — self-hosted push notifications. Public by design:
+        # phones, browsers and scripts publish/subscribe from anywhere. ntfy
+        # gates everything itself (auth-default-access deny-all + per-user
+        # tokens), so NO Cloudflare Access gate — a browser SSO wall would
+        # break the token-authenticated publishers and the app's long-lived
+        # subscribe streams. See docs/ntfy.md.
+        "ntfy.rithviknishad.dev" = "http://localhost:80";
       };
     };
   };

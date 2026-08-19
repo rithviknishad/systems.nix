@@ -156,9 +156,10 @@ group (`ui.default-sort-by: group`):
 
 | Group | Endpoints | "Up" means | ntfy topic |
 |---|---|---|---|
-| `internal` | Grafana / VMSingle / VictoriaLogs `/health`, ESPHome `/`, the MCP servers (Kite `/`, Settle Up `/health`) | `[STATUS] == 200` | `avocado-alerts` |
-| `public` | `rithviknishad.dev`, `photos.rithviknishad.dev` (Immich `/api/server/ping`), `kite.rithviknishad.dev` (`/healthz`) | 200 + body + TLS-expiry | `avocado-alerts` |
-| `ohcnetwork/care` | CARE public edges (`care-api /ping/`, SPA, gateway `/`, MFE `/health`) + in-cluster (MinIO, middleware, RTSPtoWeb, mock camera) | 200 (+ TLS-expiry on public) | `avocado-alerts` |
+| `internal` | Grafana / VMSingle / VictoriaLogs `/health`, ESPHome `/`, ntfy `/v1/health`, Pookalam vote `/`, the MCP servers (Kite `/`, Settle Up `/health`) | `[STATUS] == 200` | `avocado-alerts` |
+| `public` | `rithviknishad.dev`, `photos.rithviknishad.dev` (Immich `/api/server/ping`), `kite.rithviknishad.dev` (`/healthz`), `ntfy.rithviknishad.dev` (`/v1/health`), `ohc-pookalam.rithviknishad.dev` (`/`) | 200 + body + TLS-expiry | `avocado-alerts` |
+| `ohcnetwork/care` | CARE public edges (`care-api /ping/`, SPA, gateway `/`, MFE `/health`) + in-cluster (MinIO, middleware, RTSPtoWeb) | 200 (+ TLS-expiry on public) | `avocado-alerts` |
+| `ohcnetwork/teleicu/cameras` | Mock PTZ camera (in-cluster + public edge) and the physical ONVIF cameras (`matrix-cctv`, `prama-cctv`, `cpplus-cctv`) as raw TCP connects to RTSP `:554` | mock: reachable + non-5xx; physical: `[CONNECTED] == true` | `avocado-alerts` |
 | `ohcnetwork/ots` | Open Terminology Server: public edge + in-cluster `/health` | 200 (+ TLS-expiry on public) | `avocado-alerts` |
 | `ABDM-SBX` | ABDM **sandbox**: NHPR (`/v4/`) / ABHA / HIECM | reachable + non-5xx | `avocado-abdm` (prio 4) |
 | `ABDM-LIVE` | ABDM **live**: NHPR (`/v4/`) / ABHA / HIECM | reachable + non-5xx | `avocado-abdm` (prio 5) |
@@ -187,6 +188,12 @@ Two independent pipelines push to ntfy across two topics:
 > `topic` + per-group `overrides`). Pick **hard-to-guess** names — public topic
 > names are readable by anyone. For an authenticated topic, put the token in
 > `secrets/monitoring.enc.yaml` and reference it from a Secret.
+
+> **Why not the self-hosted server?** avocado also runs its own ntfy at
+> `ntfy.rithviknishad.dev` ([ntfy](ntfy.md)), but both alert pipelines still
+> target **ntfy.sh** on purpose: an alerting channel that lives on the box it
+> watches goes silent exactly when the box breaks. Keep that split — or, if you
+> do migrate, keep at least the host-level alerts on ntfy.sh.
 
 ## Network policies
 

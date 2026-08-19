@@ -242,9 +242,14 @@ kubectl -n care-teleicu rollout restart deploy/stream-server
 ```
 
 The stream keys are stored **only in sops** (each channel URL embeds the
-camera's `username:password`), never in a plaintext ConfigMap. The three
-cameras onboarded on avocado (mock, MATRIX, PRAMA) are already baked in, so
-they come back automatically after a reboot.
+camera's `username:password`), never in a plaintext ConfigMap. The four
+cameras onboarded on avocado (mock, MATRIX, PRAMA, CP Plus) are already baked
+in, so they come back automatically after a reboot.
+
+> **Every vendor's RTSP path differs** — the three physical cameras resolve to
+> `/unicaststream/1` (MATRIX), `/Streaming/Channels/101` (PRAMA) and
+> `/video/live?channel=1&…` (CP Plus). Never hand-write the path; always let
+> `care-resolve-camera` ask the camera over ONVIF.
 
 ## Object storage (MinIO)
 

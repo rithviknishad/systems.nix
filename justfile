@@ -488,6 +488,71 @@ care-dns:
     for h in care care-api care-s3 care-teleicu-gateway care-teleicu-devices mock-ptz-camera; do \
         cloudflared tunnel route dns avocado "$h.rithviknishad.dev"; done
 
+# --- Onam Pookalam Vote (rithviknishad/ohc-pookalam) -------------------------
+# A small GitHub-username-gated voting site for the OHC Network (Next.js 16 +
+# SQLite). Public at https://ohc-pookalam.rithviknishad.dev, on the tailnet via
+# Host: ohc-pookalam.avocado.local. The upstream repo ships its own Dockerfile
+# (standalone Next build + native better-sqlite3), so the image is built ON the
+# box with docker and imported into k3s's containerd — no registry, same
+# pattern as the care images above. See docs/ohc-pookalam.md.
+
+# Clone-then-build (not a flake input) because the Dockerfile does a pnpm
+# install plus a node-gyp compile of better-sqlite3 that isn't worth nixifying.
+# Uses the same .build/ scratch dir as the care image recipes. Import goes
+# through root ssh (same passwordless path as `just deploy`) — k3s ctr needs
+# root. Re-run to ship new upstream code, then `just ohc-pookalam-deploy`.
+# Build + import the app image (defaults to the master branch).
+ohc-pookalam-images ref="master":
+    rm -rf .build/ohc-pookalam
+    mkdir -p .build
+    git clone --depth 1 --branch {{ref}} https://github.com/rithviknishad/ohc-pookalam .build/ohc-pookalam
+    docker build -t ohc-pookalam:local .build/ohc-pookalam
+    docker save ohc-pookalam:local | ssh {{NIX_SSHOPTS}} {{target}} 'k3s ctr images import -'
+
+# The sops-encrypted Secret is piped straight into kubectl (plaintext never
+# touches disk). Ends with a rollout restart so a freshly imported image or a
+# changed secret is actually picked up.
+# Deploy/upgrade the pookalam site: kustomize + sops Secret + rollout restart.
+ohc-pookalam-deploy:
+    KUBECONFIG={{kubeconfig_path}} kubectl apply -k k8s/ohc-pookalam
+    # The Secret is optional by design (envFrom sets optional: true), so a
+    # first deploy without a PAT still works — skip it if it isn't there yet.
+    if [ -f secrets/ohc-pookalam.enc.yaml ]; then sops --decrypt secrets/ohc-pookalam.enc.yaml | KUBECONFIG={{kubeconfig_path}} kubectl apply -f -; else echo "note: secrets/ohc-pookalam.enc.yaml missing — running on the anonymous GitHub API rate limit (60/h)"; fi
+    KUBECONFIG={{kubeconfig_path}} kubectl -n ohc-pookalam rollout restart deploy/ohc-pookalam
+
+# Show the state of the ohc-pookalam namespace.
+ohc-pookalam-status:
+    KUBECONFIG={{kubeconfig_path}} kubectl -n ohc-pookalam get pods,svc,ingress,pvc
+
+# Tail the app logs.
+ohc-pookalam-logs:
+    KUBECONFIG={{kubeconfig_path}} kubectl -n ohc-pookalam logs -f deploy/ohc-pookalam
+
+# The votes are the ONLY state here and the PVC sits on the no-redundancy ZFS
+# stripe — run this before any risky change, and after the vote closes. Tars
+# all of /data: the .db file alone can miss votes still in the -wal.
+# Copy the SQLite database out of the pod (votes backup).
+ohc-pookalam-backup dest="pookalam-backup":
+    mkdir -p {{dest}}
+    KUBECONFIG={{kubeconfig_path}} kubectl -n ohc-pookalam exec deploy/ohc-pookalam -- \
+        tar cf - -C /data . > {{dest}}/pookalam-data.tar
+    @echo "wrote {{dest}}/pookalam-data.tar"
+
+# GITHUB_TOKEN — a scope-less PAT that lifts the api.github.com username-lookup
+# rate limit from 60/h to 5000/h. Redeploy after to apply.
+# Edit the sops-encrypted pookalam secret.
+ohc-pookalam-secrets:
+    sops secrets/ohc-pookalam.enc.yaml
+
+# Re-encrypt the secret after changing recipients in .sops.yaml.
+ohc-pookalam-secrets-rekey:
+    sops updatekeys secrets/ohc-pookalam.enc.yaml
+
+# Needs the cloudflared login cert (cloudflared tunnel login) on this machine.
+# One-time: point the public hostname at the tunnel.
+ohc-pookalam-dns:
+    cloudflared tunnel route dns avocado ohc-pookalam.rithviknishad.dev
+
 # --- ONVIF Camera Testing Console (10bedicu/onvif-console) --------------------
 # Vendor-neutral ONVIF PTZ testing console (k8s/onvif-console). Public host is
 # Access-gated (no auth of its own; relays camera credentials). See
@@ -617,3 +682,70 @@ attic-secrets:
 
 attic-secrets-rekey:
     sops updatekeys secrets/attic.enc.yaml
+
+# --- ntfy (self-hosted push notification server) -----------------------------
+# One `ntfy serve` process: message cache, user/ACL/token DB and attachments all
+# live on a single PVC (SQLite, no separate database). Public image, so no
+# build-on-box step. Everything is gated by ntfy's own auth
+# (auth-default-access: deny-all) rather than Cloudflare Access, because the
+# publishers are token-holding scripts. Users/ACLs/tokens are declared in the
+# sops secret and applied at startup.
+#   https://ntfy.rithviknishad.dev             web app / PWA, public
+#   http://avocado (Host: ntfy.avocado.local)  over Tailscale / LAN
+#   http://ntfy.ntfy.svc:8080                  in-cluster
+# See docs/ntfy.md.
+
+# The NTFY_AUTH_* entries are only read at process start, so a secret change
+# needs the rollout restart at the end.
+# Deploy/upgrade ntfy: kustomize manifests + sops Secret + rollout restart.
+ntfy-deploy:
+    KUBECONFIG={{kubeconfig_path}} kubectl apply -k k8s/ntfy
+    sops --decrypt secrets/ntfy.enc.yaml \
+        | KUBECONFIG={{kubeconfig_path}} kubectl apply -f -
+    KUBECONFIG={{kubeconfig_path}} kubectl -n ntfy rollout restart deploy/ntfy
+
+# Show the state of the ntfy namespace.
+ntfy-status:
+    KUBECONFIG={{kubeconfig_path}} kubectl -n ntfy get pods,svc,ingress,pvc
+
+# Tail the ntfy server logs (JSON).
+ntfy-logs:
+    KUBECONFIG={{kubeconfig_path}} kubectl -n ntfy logs -f deploy/ntfy
+
+# Use it for the few things that aren't declarative:
+#   just ntfy-cli user list          -> what's actually in user.db
+#   just ntfy-cli access             -> the effective ACL table
+#   just ntfy-cli user del <name>    -> removing from the secret does NOT delete
+# Run the ntfy CLI inside the running pod.
+ntfy-cli *args:
+    KUBECONFIG={{kubeconfig_path}} kubectl -n ntfy exec -it deploy/ntfy -- ntfy {{args}}
+
+# No running server needed, so this works before the first deploy. Both
+# subcommands are offline — nothing is written anywhere:
+#   just ntfy-gen user hash          -> bcrypt hash for NTFY_AUTH_USERS
+#   just ntfy-gen token generate     -> tk_... for NTFY_AUTH_TOKENS
+# Run the ntfy CLI in a THROWAWAY pod (to bootstrap the secret).
+ntfy-gen *args:
+    KUBECONFIG={{kubeconfig_path}} kubectl run ntfy-gen --rm -it --restart=Never \
+        --image=binwiederhier/ntfy:v2.27.0 -- {{args}}
+
+# The token is passed as an argument, so it lands in your shell history — use a
+# throwaway/narrow one. It must have write access to the topic.
+# Publish a test message over the public edge (proves auth + delivery).
+ntfy-test topic token message="hello from just":
+    curl -sS -H "Authorization: Bearer {{token}}" -d '{{message}}' \
+        https://ntfy.rithviknishad.dev/{{topic}}
+
+# See k8s/ntfy/secret.example.yaml for the format. Redeploy after to apply.
+# Edit the sops-encrypted ntfy secret (NTFY_AUTH_USERS / _ACCESS / _TOKENS).
+ntfy-secrets:
+    sops secrets/ntfy.enc.yaml
+
+# Re-encrypt the ntfy secret after changing recipients in .sops.yaml.
+ntfy-secrets-rekey:
+    sops updatekeys secrets/ntfy.enc.yaml
+
+# Needs the cloudflared login cert (cloudflared tunnel login) on this machine.
+# One-time: point the public ntfy hostname at the tunnel.
+ntfy-dns:
+    cloudflared tunnel route dns avocado ntfy.rithviknishad.dev

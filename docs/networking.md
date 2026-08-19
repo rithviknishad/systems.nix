@@ -92,6 +92,8 @@ flowchart LR
             kite[kite]
             care[care + teleicu]
             ots[ots api]
+            ntfy[ntfy]
+            pookalam[ohc-pookalam]
         end
     end
 
@@ -107,6 +109,8 @@ flowchart LR
     traefik -->|kite.rithviknishad.dev| kite
     traefik -->|care*.rithviknishad.dev x5| care
     traefik -->|ots.rithviknishad.dev| ots
+    traefik -->|ntfy.rithviknishad.dev| ntfy
+    traefik -->|ohc-pookalam.rithviknishad.dev| pookalam
 ```
 
 ### Public routing table
@@ -132,6 +136,8 @@ matched returns `http_status:404`.
 | `care-teleicu-devices.rithviknishad.dev` | TeleICU `teleicu-devices-fe` | [CARE](care.md) |
 | `mock-ptz-camera.rithviknishad.dev` | TeleICU `mock-ptz-camera` (mock UI, `admin`/`admin`) | [CARE](care.md) |
 | `ots.rithviknishad.dev` | OTS `ots-api` (x-api-key gated) | [Terminology Server](ots.md) |
+| `ntfy.rithviknishad.dev` | ntfy `ntfy` (deny-all + user/token auth) | [ntfy](ntfy.md) |
+| `ohc-pookalam.rithviknishad.dev` | Pookalam vote `ohc-pookalam` | [Onam Pookalam Vote](ohc-pookalam.md) |
 
 Notes:
 
@@ -152,6 +158,15 @@ Notes:
   server-to-server by CARE, so it also does **not** sit behind Cloudflare
   Access (a browser SSO wall would break those calls); see
   [Terminology Server](ots.md).
+- ntfy gates every topic with its own auth (`auth-default-access: deny-all` plus
+  per-user tokens) and is published to by scripts and subscribed to by phones,
+  so it also does **not** sit behind Cloudflare Access. Its subscribe streams
+  are long-lived SSE/WebSocket connections kept alive by a 45 s keepalive; see
+  [ntfy](ntfy.md).
+- The Onam Pookalam vote site is **intentionally wide open** (no Access gate):
+  it is a community vote and carries only its own trust-based GitHub-username
+  sign-in. It holds nothing sensitive beyond the vote tallies; see
+  [Onam Pookalam Vote](ohc-pookalam.md).
 - The metrics/logs databases (VMSingle, VictoriaLogs) are **deliberately not**
   exposed through the tunnel — reach them over Tailscale.
 

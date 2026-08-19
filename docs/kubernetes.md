@@ -250,6 +250,41 @@ in-cluster at `http://atticd.attic.svc:8080`), which also sidesteps the edge's
 ~100 MB request-body cap on pushes. Its [uptime probe](monitoring.md) hits the
 token-less in-cluster root route. Documented on its own [Attic](attic.md) page.
 
+### ntfy (notifications) — `k8s/ntfy/`
+
+[ntfy](https://ntfy.sh), a self-hosted pub/sub push notification server: `POST`
+to a topic URL and every subscribed phone, browser or script gets a push. Like
+Attic it uses the **upstream image** (`binwiederhier/ntfy`) directly. One
+`ntfy serve` process is the whole service — message cache, user/ACL/token
+database and attachments are all **SQLite + files on one 10 Gi PVC** (no
+Postgres, no broker). Deployed with kustomize plus a sops-encrypted Secret
+(`just ntfy-deploy`). Public at `https://ntfy.rithviknishad.dev`, on the tailnet
+at `ntfy.avocado.local`, and in-cluster at `http://ntfy.ntfy.svc:8080`. Auth is
+its own: `auth-default-access: deny-all` with users, topic ACLs and bearer
+tokens **declared in the sops secret** (`NTFY_AUTH_USERS` / `_ACCESS` /
+`_TOKENS`) and applied at startup — so, like Kite and OTS, its public host does
+**not** need a Cloudflare Access gate. Prometheus metrics are exposed on a
+dedicated `:9090` port (never on the public `:8080`) and scraped by a
+`VMServiceScrape`. Note the alert stack still pushes to **ntfy.sh**, so a dead
+self-hosted ntfy can still page us. Documented on its own [ntfy](ntfy.md) page.
+
+### Onam Pookalam Vote — `k8s/ohc-pookalam/`
+
+[`rithviknishad/ohc-pookalam`](https://github.com/rithviknishad/ohc-pookalam),
+a small voting site for the OHC Network's Onam pookalam contest (Next.js 16,
+`output: standalone`). Like CARE it is **built on the box** with `docker build`
+from the upstream Dockerfile and imported into containerd
+(`just ohc-pookalam-images`) — the image does a `pnpm install` plus a native
+`better-sqlite3` compile, which isn't worth nixifying. All state is **one
+SQLite file** on a 1 Gi PVC, so it runs `replicas: 1` with `strategy: Recreate`
+— a correctness constraint (single writer, RWO volume), not a capacity one.
+Deployed with kustomize plus an **optional** sops Secret
+(`just ohc-pookalam-deploy`); `GITHUB_TOKEN` only lifts the api.github.com
+rate limit for username lookups. Public at
+`https://ohc-pookalam.rithviknishad.dev` with **no** Cloudflare Access gate —
+anyone in the community is meant to open the link and vote. Documented on its
+own [Onam Pookalam Vote](ohc-pookalam.md) page.
+
 ### Zerodha Kite MCP server — `k8s/zerodha-kite/`
 
 [`zerodha/kite-mcp-server`](https://github.com/zerodha/kite-mcp-server), a Go

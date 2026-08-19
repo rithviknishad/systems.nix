@@ -1,0 +1,269 @@
+# ntfy — self-hosted pub/sub notification server on k3s.
+#
+# Deploy:   just ntfy-deploy         (manifests + sops secret)
+# Visit:    https://ntfy.rithviknishad.dev            (web app / PWA)
+#           http://avocado (Host: ntfy.avocado.local) over Tailscale / LAN
+# Publish:  curl -H 'Authorization: Bearer tk_...' -d 'hi' \
+#             https://ntfy.rithviknishad.dev/mytopic
+# In-cluster:  http://ntfy.ntfy.svc:8080/<topic>
+#
+# Architecture: ONE `ntfy serve` process — no database server, no broker.
+# Everything it persists lives on a single PVC:
+#   cache.db     message cache (SQLite), so `since=`/`poll=1` survive restarts
+#   user.db      users, ACLs and access tokens (SQLite)
+#   attachments/ on-disk attachment cache
+#
+# Auth: `auth-default-access: deny-all` — an anonymous request can neither read
+# nor write ANY topic. The host is public (see modules/cloudflared.nix), so this
+# is the only thing standing between the internet and the topics. Users, ACLs
+# and tokens are declared in the sops Secret (NTFY_AUTH_USERS / _ACCESS /
+# _TOKENS) and applied by ntfy at startup — see secret.example.yaml. There is
+# deliberately NO Cloudflare Access gate: publishers are scripts/servers holding
+# bearer tokens, and a browser SSO wall would break them.
+#
+# iOS: `upstream-base-url` forwards a *poll request* (message ID only, topic
+# hashed) to ntfy.sh so APNs can wake the iOS app; the message body never leaves
+# this box. Android/desktop don't need it.
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ntfy
+---
+# --- Non-secret server config ------------------------------------------------
+# Users/ACLs/tokens are NOT here — they come from the sops Secret as
+# NTFY_AUTH_* env vars (ntfy maps every option to NTFY_<OPTION_WITH_UNDERSCORES>).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ntfy-server-yml
+  namespace: ntfy
+data:
+  server.yml: |
+    # Public origin. Required for attachment URLs, the web app's own API calls
+    # and the iOS poll-request topic hash — must match the edge hostname.
+    base-url: "https://ntfy.rithviknishad.dev"
+    listen-http: ":8080"
+
+    # Traefik (and cloudflared before it) terminate the client connection, so
+    # without this every visitor would share one rate-limit bucket. Trust only
+    # the k3s pod/service CIDRs so the *real* client IP is what gets counted.
+    behind-proxy: true
+    proxy-forwarded-header: "X-Forwarded-For"
+    proxy-trusted-hosts: "10.42.0.0/16,10.43.0.0/16"
+
+    # Message cache — SQLite on the PVC. WAL mode keeps the single writer from
+    # blocking readers on a spinning-rust-backed local-path volume.
+    cache-file: "/var/lib/ntfy/cache.db"
+    cache-duration: "12h"
+    cache-startup-queries: |
+      pragma journal_mode = WAL;
+      pragma synchronous = normal;
+      pragma busy_timeout = 15000;
+
+    # User/ACL/token database. Its mere presence turns on access control;
+    # deny-all then means "nothing is readable or writable without credentials".
+    auth-file: "/var/lib/ntfy/user.db"
+    auth-default-access: "deny-all"
+
+    # Attachments. 15M per file stays comfortably under Cloudflare's free-plan
+    # ~100 MB request-body cap, which the public path is subject to.
+    attachment-cache-dir: "/var/lib/ntfy/attachments"
+    attachment-total-size-limit: "5G"
+    attachment-file-size-limit: "15M"
+    attachment-expiry-duration: "24h"
+
+    # Web app: login yes, self-signup no (accounts are declared in the Secret).
+    web-root: "/"
+    enable-login: true
+    enable-signup: false
+    enable-reservations: false
+
+    # iOS instant delivery. Sends only a poll request (message ID + hashed
+    # topic) upstream; the payload is fetched back from this server.
+    upstream-base-url: "https://ntfy.sh"
+
+    # Keepalives on the subscribe stream. Must stay under the Android app's
+    # hardcoded 77s timeout, and they also stop Cloudflare from reaping the
+    # long-lived SSE/WebSocket connections as idle.
+    keepalive-interval: "45s"
+
+    # Metrics on a DEDICATED port only — never on :8080, which is public.
+    # Scraped by VMAgent via the VMServiceScrape below.
+    metrics-listen-http: ":9090"
+
+    log-level: info
+    log-format: json
+---
+# --- Data (message cache + user DB + attachments) ----------------------------
+# Lands on the k3s local-path storageClass under /var on the rpool STRIPE — no
+# redundancy (see docs/storage.md). Messages are ephemeral by design (12h
+# cache), but user.db holds the accounts/tokens; back it up if that matters.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ntfy-data
+  namespace: ntfy
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ntfy
+  namespace: ntfy
+  labels:
+    app.kubernetes.io/name: ntfy
+spec:
+  replicas: 1
+  # Recreate: two ntfy processes on the same SQLite files would corrupt them.
+  strategy: { type: Recreate }
+  selector:
+    matchLabels: { app.kubernetes.io/name: ntfy }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: ntfy }
+      annotations:
+        # Bump to force a rollout when the ConfigMap above changes.
+        checksum/config: config-v1
+    spec:
+      # Runs unprivileged. k3s's local-path provisioner creates the volume dir
+      # mode 0777, so an arbitrary UID can write to it (fsGroup does NOT apply
+      # to hostPath-backed volumes, hence the explicit reliance on that).
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        # ntfy expects attachment-cache-dir to already exist; it does not
+        # create it. Same image (alpine-based), so no extra pull.
+        - name: mkdirs
+          image: binwiederhier/ntfy:v2.27.0
+          command: [sh, -c, "mkdir -p /var/lib/ntfy/attachments"]
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/ntfy
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+      containers:
+        - name: ntfy
+          image: binwiederhier/ntfy:v2.27.0
+          # Image ENTRYPOINT is `ntfy`; pass the subcommand + flags only.
+          args: [serve, --config, /etc/ntfy/server.yml]
+          envFrom:
+            # Provides NTFY_AUTH_USERS / NTFY_AUTH_ACCESS / NTFY_AUTH_TOKENS.
+            - secretRef: { name: ntfy-secret }
+          ports:
+            - name: http
+              containerPort: 8080
+            - name: metrics
+              containerPort: 9090
+          volumeMounts:
+            - name: config
+              mountPath: /etc/ntfy
+              readOnly: true
+            - name: data
+              mountPath: /var/lib/ntfy
+            - name: tmp
+              mountPath: /tmp
+          readinessProbe:
+            # /v1/health is unauthenticated even under deny-all, so kubelet and
+            # Gatus can probe it without a token.
+            httpGet: { path: /v1/health, port: http }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /v1/health, port: http }
+            initialDelaySeconds: 20
+            periodSeconds: 30
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: "20m"
+              memory: "64Mi"
+            limits:
+              cpu: "500m"
+              memory: "256Mi"
+      volumes:
+        - name: config
+          configMap: { name: ntfy-server-yml }
+        - name: data
+          persistentVolumeClaim: { claimName: ntfy-data }
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ntfy
+  namespace: ntfy
+  labels:
+    app.kubernetes.io/name: ntfy
+spec:
+  selector: { app.kubernetes.io/name: ntfy }
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+    - name: metrics
+      port: 9090
+      targetPort: metrics
+---
+# --- Metrics scrape ----------------------------------------------------------
+# VMAgent runs with selectAllByDefault, so a VMServiceScrape in this namespace
+# is picked up without touching the monitoring stack's config.
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMServiceScrape
+metadata:
+  name: ntfy
+  namespace: ntfy
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ntfy
+  endpoints:
+    - port: metrics
+---
+# --- Ingress (Traefik routes by Host) ----------------------------------------
+# Public edge (Cloudflare Tunnel -> Traefik) and the tailnet/LAN host. Both hit
+# the same Service; auth is ntfy's own (deny-all + tokens/users), so there is no
+# Cloudflare Access app in front — token-holding publishers must keep working.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ntfy
+  namespace: ntfy
+spec:
+  rules:
+    - host: ntfy.rithviknishad.dev
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: ntfy
+                port: { number: 8080 }
+    # curl -H 'Host: ntfy.avocado.local' http://avocado/v1/health
+    - host: ntfy.avocado.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: ntfy
+                port: { number: 8080 }

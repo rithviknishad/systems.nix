@@ -25,6 +25,7 @@ docs/.jekyll-cache/
 docs/.jekyll-metadata
 docs/vendor/
 
-# Scratch dir for `just care-images` — shallow clones of upstream repos used
+# Scratch dir for the image-build recipes (`just care-images`,
+# `just ohc-pookalam-images`, ...) — shallow clones of upstream repos used
 # only as docker build contexts. Never source of truth, always recreatable.
 .build/
