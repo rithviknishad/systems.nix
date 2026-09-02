@@ -142,6 +142,65 @@ mon-secrets:
 mon-secrets-rekey:
     sops updatekeys secrets/monitoring.enc.yaml
 
+# --- Storage / backup durability --------------------------------------------
+# k3s's default `local-path` StorageClass uses reclaimPolicy: Delete, so
+# deleting a namespace permanently destroys every volume in it. That is how
+# the CARE database AND its 14 days of pg_dumps were lost on 2026-08-31.
+# See k8s/storage/local-path-retain.yaml and docs/storage.md.
+
+# Install the `local-path-retain` StorageClass (Retain reclaim policy) so that
+# backup PVCs survive their namespace being deleted. Idempotent.
+# Install the local-path-retain StorageClass (backup volumes survive ns delete)
+storage-deploy:
+    KUBECONFIG={{kubeconfig_path}} kubectl apply -k k8s/storage
+
+# Retro-fit protection onto backup volumes that ALREADY exist. storageClassName
+# is immutable on a live PVC, so an existing backup volume cannot simply be
+# moved to local-path-retain — but the PV's reclaim policy CAN be patched in
+# place, which buys the same protection without touching the data.
+# Patch existing backup PVs to Retain so they outlive their namespace
+backups-protect:
+    #!/usr/bin/env sh
+    set -eu
+    export KUBECONFIG={{kubeconfig_path}}
+    kubectl get pv -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.spec.claimRef.namespace}{" "}{.spec.claimRef.name}{" "}{.spec.persistentVolumeReclaimPolicy}{"\n"}{end}' \
+    | while read -r pv ns claim policy; do
+        case "$claim" in
+          *-db-backups) ;;
+          *) continue ;;
+        esac
+        if [ "$policy" = "Retain" ]; then
+          echo "ok      $ns/$claim ($pv) already Retain"
+        else
+          kubectl patch pv "$pv" -p '{"spec":{"persistentVolumeReclaimPolicy":"Retain"}}' >/dev/null
+          echo "patched $ns/$claim ($pv) $policy -> Retain"
+        fi
+      done
+
+# Show every backup volume, its reclaim policy, and the dumps it holds — the
+# quickest way to answer "do I actually have a restorable backup right now?".
+# Show backup volumes, reclaim policies, last CronJob success, and dumps on disk
+backups-status:
+    #!/usr/bin/env sh
+    set -eu
+    export KUBECONFIG={{kubeconfig_path}}
+    # Capture once: piping the same stream into both `sed 1p` and `grep` would
+    # let the first consumer swallow all of stdin.
+    pvs="$(kubectl get pv -o custom-columns='PV:.metadata.name,NS:.spec.claimRef.namespace,CLAIM:.spec.claimRef.name,POLICY:.spec.persistentVolumeReclaimPolicy,STATUS:.status.phase')"
+    echo "--- backup PVs (reclaim policy matters: Delete = dies with the namespace) ---"
+    echo "$pvs" | sed -n 1p
+    echo "$pvs" | grep -- '-db-backups' || echo '(none found)'
+    echo
+    cjs="$(kubectl get cronjob -A -o custom-columns='NS:.metadata.namespace,NAME:.metadata.name,SCHEDULE:.spec.schedule,LAST_SUCCESS:.status.lastSuccessfulTime')"
+    echo "--- backup CronJobs (last successful run) ---"
+    echo "$cjs" | sed -n 1p
+    echo "$cjs" | grep -- '-db-backup' || echo '(none found)'
+    echo
+    # The local-path storage dir is root-only, so list it over the same
+    # passwordless root ssh path the deploy recipes use.
+    echo "--- dumps on disk ---"
+    ssh {{NIX_SSHOPTS}} {{target}} 'for d in /var/lib/rancher/k3s/storage/*-db-backups; do [ -d "$d" ] || continue; echo "$d:"; ls -lh "$d" | tail -n +2; echo; done' || echo '(could not read storage dir)'
+
 # --- ESPHome (dashboard for ESP32/ESP8266 firmware) --------------------------
 # Runs in k3s with hostNetwork (mDNS/OTA need the LAN). Dashboard:
 #   http://avocado:6052 (Tailscale) or https://esphome.rithviknishad.dev

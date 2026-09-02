@@ -101,7 +101,7 @@ Four images can't be consumed from upstream registries as-is:
 
 | Image | Why custom |
 |---|---|
-| `care-backend:local` | plugins install at **build** time (`ADDITIONAL_PLUGS` → pip in the Dockerfile builder stage) — bakes in [care_teleicu_devices](https://github.com/10bedicu/care_teleicu_devices) per `k8s/care/additional-plugs.json` |
+| `care-backend:local` | plugins install at **build** time (`ADDITIONAL_PLUGS` → pip in the Dockerfile builder stage) — bakes in [care_teleicu_devices](https://github.com/10bedicu/care_teleicu_devices) and [care_token_display](https://github.com/ohcnetwork/care_token_display) per `k8s/care/additional-plugs.json` |
 | `care-fe:local` | the API URL is compiled into the Vite bundle (`REACT_CARE_API_URL` via `.env.local`) |
 | `care-teleicu-devices-fe:local` | upstream publishes no image |
 | `mock-ptz-camera:local` | upstream publishes no image |
@@ -251,6 +251,20 @@ in, so they come back automatically after a reboot.
 > `/video/live?channel=1&…` (CP Plus). Never hand-write the path; always let
 > `care-resolve-camera` ask the camera over ONVIF.
 
+## Plugs
+
+Baked into `care-backend:local` at build time via `k8s/care/additional-plugs.json`
+(kept in sync with the `ADDITIONAL_PLUGS` runtime ConfigMap value — the build
+installs the pip packages, the runtime value adds them to `INSTALLED_APPS`):
+
+| Plug | Source | Purpose |
+|---|---|---|
+| `gateway_device`, `camera_device`, `vitals_observation_device` | [10bedicu/care_teleicu_devices](https://github.com/10bedicu/care_teleicu_devices) | TeleICU gateway/camera/vitals devices (see above) |
+| `token_display` | [ohcnetwork/care_token_display](https://github.com/ohcnetwork/care_token_display) | SSR waiting-room TV queue board at `care-api.rithviknishad.dev/token_display/sub_queues/<uuid1>,<uuid2>,...`, showing current + upcoming tokens per sub-queue |
+
+Upgrading a plug's pinned ref = re-run `just care-images` and roll the
+affected Deployments (see [Custom images](#custom-images-built-on-the-box-no-registry)).
+
 ## Object storage (MinIO)
 
 One MinIO instance (namespace `care`, 50 Gi PVC) with three buckets, created
@@ -276,11 +290,43 @@ kubectl -n care exec -it deploy/postgres -- sh   # then, with the backup PVC con
 pg_restore -d "$DATABASE_URL" --clean --if-exists care-<date>.dump
 ```
 
-> **Not disaster recovery.** The backup PVCs, the databases, and the MinIO
-> objects all live on the same striped, non-redundant rpool
-> ([Storage](storage.md)). An offsite copy (restic/rclone to B2/R2 or
-> `zfs send` to another box) is deliberately deferred — planned as a
-> follow-up.
+Check at any time whether a restorable backup actually exists:
+
+```sh
+just backups-status   # PVs + reclaim policies, last CronJob success, dumps on disk
+```
+
+### The backup PVC must outlive its namespace
+
+The `care-db-backups` PVC uses the **`local-path-retain`** StorageClass
+(`reclaimPolicy: Retain`), not the default `local-path` (`Delete`).
+
+This is not a detail. On **2026-08-31** the `care` namespace was deleted to
+clean up a runaway scale-up. Deleting a namespace deletes its PVCs, and under
+`Delete` that destroys the backing volume and its data directory — so the
+CARE database **and all 14 days of its backups went at the same moment**,
+because the backups lived in the namespace they were protecting. There was
+nothing to restore from. See [Storage](storage.md).
+
+`storageClassName` is immutable on an existing PVC, so a backup volume that
+predates this change cannot simply be moved onto the new class. Patch the live
+PV's reclaim policy instead — same protection, no data movement:
+
+```sh
+just backups-protect   # idempotent; patches *-db-backups PVs to Retain
+```
+
+> **Still not disaster recovery.** The backup PVCs, the databases, and the
+> MinIO objects all live on the same striped, non-redundant rpool
+> ([Storage](storage.md)). Retain protects against an *operator mistake*, not
+> against a disk failure — losing either disk still loses all of it.
+>
+> The layers today, weakest to strongest:
+> 1. **ZFS snapshots** of `rpool/var` — block-level undo, same pool.
+> 2. **These `pg_dump`s** on `local-path-retain` — portable, survive the namespace.
+> 3. **An offsite copy** (restic/rclone to B2/R2, or `zfs send` to another
+>    box) — **still not wired**. This is the only layer that survives losing a
+>    disk, and it remains the biggest open gap.
 
 ## Monitoring
 

@@ -12,7 +12,9 @@
 # (S3-compatible object storage for file uploads — presigned URLs are handed
 # to browsers, hence the public care-s3 host).
 #
-# The backend image has the TeleICU devices plugs baked in at BUILD time
+# The backend image has the TeleICU devices plugs (gateway/camera/vitals) and
+# the care_token_display plug (waiting-room TV queue board,
+# https://github.com/ohcnetwork/care_token_display) baked in at BUILD time
 # (upstream installs ADDITIONAL_PLUGS via pip in the Dockerfile builder
 # stage); the same JSON must be present at RUNTIME (ConfigMap below) so the
 # plugin apps are added to INSTALLED_APPS. See k8s/care/additional-plugs.json.
@@ -62,7 +64,7 @@ data:
   # MUST stay semantically in sync with k8s/care/additional-plugs.json (used
   # at image build time): build installs the pip packages, this makes Django
   # load the plugin apps.
-  ADDITIONAL_PLUGS: '[{"name": "gateway_device", "package_name": "git+https://github.com/10bedicu/care_teleicu_devices.git", "version": "@main"}, {"name": "camera_device", "package_name": "git+https://github.com/10bedicu/care_teleicu_devices.git", "version": "@main"}, {"name": "vitals_observation_device", "package_name": "git+https://github.com/10bedicu/care_teleicu_devices.git", "version": "@main"}]'
+  ADDITIONAL_PLUGS: '[{"name": "gateway_device", "package_name": "git+https://github.com/10bedicu/care_teleicu_devices.git", "version": "@main"}, {"name": "camera_device", "package_name": "git+https://github.com/10bedicu/care_teleicu_devices.git", "version": "@main"}, {"name": "vitals_observation_device", "package_name": "git+https://github.com/10bedicu/care_teleicu_devices.git", "version": "@main"}, {"name": "token_display", "package_name": "git+https://github.com/ohcnetwork/care_token_display.git", "version": "@main"}]'
 ---
 # --- MinIO (S3-compatible object storage) ------------------------------------
 apiVersion: v1

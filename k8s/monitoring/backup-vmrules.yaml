@@ -1,0 +1,80 @@
+---
+# backup-vmrules.yaml — VMRule for backup freshness and failure.
+#
+# Backups fail silently. That is their defining characteristic: nothing breaks
+# when a dump does not happen, so the first time you find out is when you need
+# the dump and it is not there.
+#
+# Two concrete misses on this box motivated these rules:
+#   - The care pg_dump CronJob ran faithfully for weeks and was still useless,
+#     because the volume it wrote to was destroyed with its namespace on
+#     2026-08-31 (fixed by k8s/storage/local-path-retain.yaml).
+#   - The teleicu CronJob silently produced no dump on 2026-08-29 and
+#     2026-08-30. Nothing alerted; the gap was found by listing the directory
+#     a day later while investigating an unrelated incident.
+#
+# These alert on the OUTCOME (a recent successful run) rather than on the
+# CronJob object existing, which is the distinction that matters.
+#
+# Metrics come from kube-state-metrics, already scraped by the stack.
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMRule
+metadata:
+  name: backup-alerts
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: backups
+    app.kubernetes.io/component: alerting
+    app.kubernetes.io/part-of: victoria-metrics-k8s-stack
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  groups:
+    - name: backup-freshness
+      rules:
+        # All backup CronJobs on this box run daily (care 02:30, teleicu
+        # 02:45). 36h allows a single run to be late or skipped for a reboot
+        # without paging, while still catching two consecutive misses.
+        - alert: BackupCronJobStale
+          expr: |-
+            (time() - kube_cronjob_status_last_successful_time{cronjob=~".*-db-backup"}) > 129600
+          for: 30m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Backup {{ $labels.namespace }}/{{ $labels.cronjob }} has not succeeded in over 36h"
+            description: >-
+              The last successful run of {{ $labels.cronjob }} in namespace
+              {{ $labels.namespace }} was {{ $value | humanizeDuration }} ago.
+              This database is accumulating unbacked-up changes. Check
+              `kubectl -n {{ $labels.namespace }} get jobs` and the pod logs.
+
+        # Catches a CronJob that was deleted, never created, or whose
+        # kube-state-metrics series disappeared — the "no signal at all" case
+        # that a staleness rule alone cannot see.
+        - alert: BackupCronJobMissing
+          expr: |-
+            absent(kube_cronjob_status_last_successful_time{cronjob="care-db-backup"})
+          for: 6h
+          labels:
+            severity: warning
+          annotations:
+            summary: "The care-db-backup CronJob is reporting no successful runs"
+            description: >-
+              No kube_cronjob_status_last_successful_time series exists for
+              care-db-backup. Either the CronJob is absent from the cluster or
+              it has never completed successfully since being created.
+
+    - name: backup-failures
+      rules:
+        - alert: BackupJobFailed
+          expr: |-
+            kube_job_status_failed{job_name=~".*-db-backup-.*"} > 0
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Backup job {{ $labels.namespace }}/{{ $labels.job_name }} failed"
+            description: >-
+              Backup job {{ $labels.job_name }} in namespace
+              {{ $labels.namespace }} has {{ $value }} failed pod(s). Inspect
+              with `kubectl -n {{ $labels.namespace }} logs job/{{ $labels.job_name }}`.

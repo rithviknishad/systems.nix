@@ -1,0 +1,37 @@
+# Cluster-wide StorageClasses.
+#
+# Deploy: just storage-deploy
+#
+# k3s ships one StorageClass — `local-path`, the default, with
+# reclaimPolicy: Delete. Delete means the PersistentVolume *and its data
+# directory under /var/lib/rancher/k3s/storage* are destroyed the moment the
+# bound PVC goes away. Deleting a namespace deletes its PVCs, so a single
+# `kubectl delete ns <x>` permanently destroys every volume in it.
+#
+# That is not hypothetical. On 2026-08-31 `kubectl delete ns care` destroyed
+# the CARE Postgres volume AND the volume holding its 14 days of pg_dump
+# backups, because the backup PVC lived in the same namespace under the same
+# Delete policy. There was nothing left to restore from.
+#
+# `local-path-retain` is the same provisioner with reclaimPolicy: Retain: when
+# the PVC goes away the PV is left behind in state Released and the data
+# directory on disk is untouched. Recovery is then a matter of re-binding or
+# copying the files out, rather than a restore from nothing.
+#
+# Use it for anything whose loss is not recoverable by redeploying — backup
+# volumes above all. Ordinary service data can stay on `local-path`, where
+# automatic cleanup is the desirable behaviour.
+#
+# Note: `storageClassName` is IMMUTABLE on an existing PVC. Moving a volume
+# that already exists onto this class means migrating it (copy out, recreate
+# the PVC, copy back) — see docs/storage.md. For an existing PV you can get
+# the same protection in place with `just backups-protect`, which patches the
+# live PV's reclaim policy without touching the data.
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: local-path-retain
+provisioner: rancher.io/local-path
+reclaimPolicy: Retain
+volumeBindingMode: WaitForFirstConsumer

@@ -77,6 +77,9 @@
           acltype = "posixacl";
           xattr = "sa";
           relatime = "on";
+          # Opt-in by default: datasets that need rolling snapshots override
+          # this to "true" below. modules/zfs.nix owns which those are and
+          # reconciles them on a live pool (disko only runs at install time).
           "com.sun:auto-snapshot" = "false";
         };
 
@@ -94,15 +97,23 @@
               atime = "off";
             };
           };
+          # /var holds /var/lib/rancher/k3s/storage — every k8s PVC on the box.
+          # Snapshotted: this is the irreplaceable one.
           "var" = {
             type = "zfs_fs";
             mountpoint = "/var";
-            options.mountpoint = "legacy";
+            options = {
+              mountpoint = "legacy";
+              "com.sun:auto-snapshot" = "true";
+            };
           };
           "home" = {
             type = "zfs_fs";
             mountpoint = "/home";
-            options.mountpoint = "legacy";
+            options = {
+              mountpoint = "legacy";
+              "com.sun:auto-snapshot" = "true";
+            };
           };
         };
       };

@@ -110,9 +110,39 @@ ARC/ZIL use node-exporter's built-in ZFS collector.
 | `ZFSPoolNotOnline` | critical | a pool leaves the `online` state (1m) |
 | `ZFSPoolDegraded` | warning | pool `degraded` |
 | `ZFSPoolFaulted` | critical | pool `faulted` (immediate) |
+| `ZFSPoolFillingUp` | warning | pool > 80% allocated for 30m |
+| `ZFSPoolCriticallyFull` | critical | pool > 90% allocated for 5m |
+| `ZFSSnapshotsMissing` | critical | a dataset tagged `auto-snapshot=true` has **zero** snapshots for 1h |
+| `ZFSSnapshotsStale` | warning | newest snapshot of a tagged dataset is > 2h old |
 | `ZFSARCHitRatioLow` | warning | ARC hit ratio < 80% for 15m |
 | `ZFSARCShrunk` | warning | ARC < 50% of max target for 30m |
 | `ZFSHighZILCommitRate` | warning | ZIL commits > 1000/s for 10m |
+
+The capacity pair exists because [rolling snapshots](storage.md#snapshots)
+retain freed blocks: deleting a large PVC no longer frees space immediately,
+so the pool can fill quietly.
+
+`ZFSSnapshotsMissing` guards the failure that cost us the CARE database. The
+snapshot timers ran green every 15 minutes for 73 days while creating **zero**
+snapshots, because the datasets were tagged `com.sun:auto-snapshot=false`. A
+unit exiting 0 proved nothing, so this alerts on the *artifact* — snapshots
+existing and being fresh — rather than on the job succeeding.
+
+### Backups (`backup-vmrules.yaml`)
+
+From `kube_cronjob_status_last_successful_time` / `kube_job_status_failed`
+(kube-state-metrics).
+
+| Alert | Severity | Fires when |
+|---|---|---|
+| `BackupCronJobStale` | critical | a `*-db-backup` CronJob hasn't succeeded in > 36h |
+| `BackupCronJobMissing` | warning | no successful-run series exists for `care-db-backup` for 6h |
+| `BackupJobFailed` | warning | a backup Job has a failed pod for 15m |
+
+Backups fail silently by nature — nothing breaks when a dump doesn't happen,
+so you find out when you need it. The `teleicu-db-backup` CronJob silently
+produced no dump on 2026-08-29 and 2026-08-30 and nothing noticed; 36h lets a
+single run slip for a reboot while still catching two consecutive misses.
 
 ### SMART (`smart-vmrules.yaml`)
 

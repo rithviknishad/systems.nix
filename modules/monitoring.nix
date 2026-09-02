@@ -41,6 +41,50 @@ let
         done
       done < <(${pkgs.zfs}/bin/zpool list -H -o name,health)
 
+      # Pool capacity. Snapshots retain freed blocks, so a pool that was
+      # comfortable can fill up quietly once rolling snapshots are enabled
+      # (modules/zfs.nix) — these back the ZFSPoolFillingUp/CriticallyFull
+      # alerts. -p gives exact bytes instead of human-rounded values.
+      echo "# HELP node_zfs_zpool_size_bytes Total size of the ZFS pool in bytes."
+      echo "# TYPE node_zfs_zpool_size_bytes gauge"
+      while read -r name size _alloc _free; do
+        printf 'node_zfs_zpool_size_bytes{zpool="%s"} %s\n' "$name" "$size"
+      done < <(${pkgs.zfs}/bin/zpool list -H -p -o name,size,alloc,free)
+
+      echo "# HELP node_zfs_zpool_allocated_bytes Allocated bytes in the ZFS pool."
+      echo "# TYPE node_zfs_zpool_allocated_bytes gauge"
+      while read -r name _size alloc _free; do
+        printf 'node_zfs_zpool_allocated_bytes{zpool="%s"} %s\n' "$name" "$alloc"
+      done < <(${pkgs.zfs}/bin/zpool list -H -p -o name,size,alloc,free)
+
+      echo "# HELP node_zfs_zpool_free_bytes Free bytes in the ZFS pool."
+      echo "# TYPE node_zfs_zpool_free_bytes gauge"
+      while read -r name _size _alloc free; do
+        printf 'node_zfs_zpool_free_bytes{zpool="%s"} %s\n' "$name" "$free"
+      done < <(${pkgs.zfs}/bin/zpool list -H -p -o name,size,alloc,free)
+
+      # Per-dataset snapshot coverage, for datasets that OPT IN via
+      # com.sun:auto-snapshot=true. This exists because the failure mode that
+      # cost us the care database was silent: the snapshot timers ran green
+      # every 15 minutes for 73 days while creating zero snapshots. Counting
+      # them and tracking the newest one turns that into an alertable signal
+      # (ZFSSnapshotsMissing / ZFSSnapshotsStale).
+      echo "# HELP node_zfs_dataset_snapshot_count Number of snapshots for a dataset tagged com.sun:auto-snapshot=true."
+      echo "# TYPE node_zfs_dataset_snapshot_count gauge"
+      while read -r ds tagged; do
+        [ "$tagged" = "true" ] || continue
+        n="$(${pkgs.zfs}/bin/zfs list -H -d 1 -t snapshot -o name "$ds" 2>/dev/null | ${pkgs.coreutils}/bin/wc -l)"
+        printf 'node_zfs_dataset_snapshot_count{dataset="%s"} %s\n' "$ds" "$n"
+      done < <(${pkgs.zfs}/bin/zfs list -H -o name,com.sun:auto-snapshot)
+
+      echo "# HELP node_zfs_dataset_latest_snapshot_timestamp_seconds Creation time of the newest snapshot for a tagged dataset (0 if none)."
+      echo "# TYPE node_zfs_dataset_latest_snapshot_timestamp_seconds gauge"
+      while read -r ds tagged; do
+        [ "$tagged" = "true" ] || continue
+        latest="$(${pkgs.zfs}/bin/zfs list -H -p -d 1 -t snapshot -o creation -s creation "$ds" 2>/dev/null | ${pkgs.coreutils}/bin/tail -n 1)"
+        printf 'node_zfs_dataset_latest_snapshot_timestamp_seconds{dataset="%s"} %s\n' "$ds" "''${latest:-0}"
+      done < <(${pkgs.zfs}/bin/zfs list -H -o name,com.sun:auto-snapshot)
+
       echo "# HELP node_zfs_textfile_scrape_success Whether the ZFS textfile generator last ran successfully."
       echo "# TYPE node_zfs_textfile_scrape_success gauge"
       echo "node_zfs_textfile_scrape_success 1"

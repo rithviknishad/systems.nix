@@ -1,14 +1,15 @@
 ---
 # zfs-vmrules.yaml — VMRule for ZFS host-level monitoring.
 #
-# Pool-state alerts read node_zfs_zpool_state, which is emitted by the NixOS
-# `zfs-textfile-metrics` timer (modules/monitoring.nix) into node-exporter's
-# textfile collector. ARC/ZIL alerts use node-exporter's built-in ZFS
-# collector (/proc/spl/kstat/zfs/).
+# Pool-state, capacity and snapshot-coverage alerts read the node_zfs_* metrics
+# emitted by the NixOS `zfs-textfile-metrics` timer (modules/monitoring.nix)
+# into node-exporter's textfile collector. ARC/ZIL alerts use node-exporter's
+# built-in ZFS collector (/proc/spl/kstat/zfs/).
 #
 # avocado's rpool is a NO-REDUNDANCY stripe across two disks — losing either
 # disk destroys the pool — so ZFSPoolNotOnline/Faulted are the highest-value
-# alerts here.
+# alerts here. ZFSSnapshotsMissing is a close second: it is the guard against
+# rolling snapshots silently not happening (see docs/storage.md).
 apiVersion: operator.victoriametrics.com/v1beta1
 kind: VMRule
 metadata:
@@ -61,6 +62,78 @@ spec:
               ZFS pool {{ $labels.zpool }} on {{ $labels.instance }} has
               FAULTED. All data on this pool is inaccessible until the fault
               is resolved.
+
+    - name: zfs-capacity
+      rules:
+        # Rolling snapshots (modules/zfs.nix) retain freed blocks, so deleting
+        # a large PVC no longer frees space immediately — it frees it when the
+        # snapshot ages out. That makes capacity a live concern rather than a
+        # slow drift, and a ZFS pool at 100% is genuinely painful to recover
+        # from (you can need free space just to delete things).
+        - alert: ZFSPoolFillingUp
+          expr: |-
+            (node_zfs_zpool_allocated_bytes / node_zfs_zpool_size_bytes) > 0.80
+          for: 30m
+          labels:
+            severity: warning
+          annotations:
+            summary: "ZFS pool {{ $labels.zpool }} is over 80% full"
+            description: >-
+              ZFS pool {{ $labels.zpool }} on {{ $labels.instance }} is
+              {{ $value | humanizePercentage }} allocated. Check snapshot usage
+              with `zfs list -o space -r {{ $labels.zpool }}` — old snapshots
+              holding freed blocks are the usual cause.
+
+        - alert: ZFSPoolCriticallyFull
+          expr: |-
+            (node_zfs_zpool_allocated_bytes / node_zfs_zpool_size_bytes) > 0.90
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "ZFS pool {{ $labels.zpool }} is over 90% full"
+            description: >-
+              ZFS pool {{ $labels.zpool }} on {{ $labels.instance }} is
+              {{ $value | humanizePercentage }} allocated. ZFS performance
+              degrades badly near full and freeing space can itself require
+              space. Destroy old snapshots or move data off the pool now.
+
+    - name: zfs-snapshots
+      rules:
+        # The failure these two exist for: on 2026-08-31 the care namespace was
+        # deleted and there was no snapshot to recover from, because the
+        # snapshot timers had been running green for 73 days while the datasets
+        # were tagged com.sun:auto-snapshot=false. Green timers proved nothing.
+        # These alert on the ARTIFACT (snapshots existing and being fresh)
+        # rather than on the job exiting 0.
+        - alert: ZFSSnapshotsMissing
+          expr: |-
+            node_zfs_dataset_snapshot_count == 0
+          for: 1h
+          labels:
+            severity: critical
+          annotations:
+            summary: "ZFS dataset {{ $labels.dataset }} is tagged for snapshots but has none"
+            description: >-
+              {{ $labels.dataset }} has com.sun:auto-snapshot=true but zero
+              snapshots exist. Rolling snapshots are NOT protecting this
+              dataset. Check `systemctl status zfs-snapshot-frequent.service`
+              and `journalctl -u zfs-snapshot-properties`.
+
+        - alert: ZFSSnapshotsStale
+          expr: |-
+            node_zfs_dataset_latest_snapshot_timestamp_seconds > 0
+            and
+            (time() - node_zfs_dataset_latest_snapshot_timestamp_seconds) > 7200
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "ZFS snapshots for {{ $labels.dataset }} are stale"
+            description: >-
+              The newest snapshot of {{ $labels.dataset }} is
+              {{ $value | humanizeDuration }} old. The `frequent` timer should
+              be creating one every 15 minutes, so snapshotting has stalled.
 
     - name: zfs-arc
       rules:

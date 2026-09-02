@@ -2,10 +2,18 @@
 #
 # pg_dump (custom format, compressed) into a dedicated PVC, keeping 14 days.
 # This protects against app-level disasters (bad migration, fat-fingered
-# delete) which ZFS-level redundancy or snapshots would faithfully preserve.
+# delete) which ZFS-level redundancy would faithfully preserve.
+#
+# Layers protecting this database, weakest to strongest:
+#   1. ZFS snapshots of rpool/var (modules/zfs.nix) — block-level undo, same
+#      pool, covers "I deleted it 20 minutes ago".
+#   2. These pg_dumps — portable, verifiable, restorable into another
+#      Postgres; on local-path-retain so they OUTLIVE the namespace.
+#   3. An offsite copy — still to be wired (docs/care.md "Backups").
+#
 # >>> The PVC lives on the SAME striped, non-redundant rpool as the database
-#     itself, so this is NOT disaster recovery — an offsite copy is planned
-#     separately (see docs/care.md "Backups", which also has restore steps).
+#     itself, so this is still NOT disaster recovery: it survives an operator
+#     mistake, not a disk failure. Only (3) covers losing a disk.
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -14,6 +22,11 @@ metadata:
   namespace: care
 spec:
   accessModes: [ReadWriteOnce]
+  # Retain, NOT the default local-path: on 2026-08-31 `kubectl delete ns care`
+  # destroyed this volume along with the database it existed to protect. With
+  # Retain the PV survives the namespace and the dumps stay on disk.
+  # See k8s/storage/local-path-retain.yaml.
+  storageClassName: local-path-retain
   resources:
     requests:
       storage: 10Gi
