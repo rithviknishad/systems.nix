@@ -116,6 +116,23 @@ just generations
 | `just mon-ntfy-test [topic]` | send a test push |
 | `just mon-destroy` | remove the CR layer + helm release |
 
+### SigNoz (APM)
+
+| Recipe | Action |
+|---|---|
+| `just signoz-deploy` | namespace + helm release + ingress/scrape layer |
+| `just signoz-status` | pods/svc/ingress/pvc in `signoz` |
+| `just signoz-ui` | port-forward the SigNoz UI → `:3301` |
+| `just signoz-logs` | tail the query service |
+| `just signoz-collector-logs` | tail the OTel collector (ingest) |
+| `just signoz-clickhouse` | `clickhouse-client` shell in the ClickHouse pod |
+| `just signoz-secrets` | edit the sops ClickHouse password |
+| `just signoz-destroy` | remove the release — **destroys the telemetry data** |
+
+> Only the recipes for the two helmfile-based stacks are listed here. Every
+> other workload follows the same `<name>-deploy` / `-status` / `-logs` /
+> `-secrets` shape — run `just --list` for the full set.
+
 > The `justfile` connects over Tailscale MagicDNS (`avocado`) and disables
 > `known_hosts` checking (`NIX_SSHOPTS`) so deploys don't trip over stale host
 > keys.
@@ -126,11 +143,12 @@ just generations
 just kubeconfig                    # once
 kubectl apply -f k8s/sample.yaml   # smoke test
 kubectl apply -k k8s/immich        # after creating k8s/immich/secret.yaml
-just mon-deploy                    # monitoring stack
+just mon-deploy                    # monitoring stack (infra telemetry)
+just signoz-deploy                 # SigNoz (application telemetry)
 ```
 
-See [Kubernetes](kubernetes.md) and [Monitoring](monitoring.md) for the
-per-workload details.
+See [Kubernetes](kubernetes.md), [Monitoring](monitoring.md) and
+[SigNoz](signoz.md) for the per-workload details.
 
 ## Publishing these docs to GitHub Pages
 

@@ -1,0 +1,56 @@
+---
+# helmfile.yaml — Helm release for SigNoz (traces/logs/metrics APM) on avocado.
+#
+# SigNoz is the *application* observability stack: services ship OpenTelemetry
+# data to its collector, which writes to ClickHouse. It deliberately does NOT
+# replace k8s/monitoring — VictoriaMetrics + Grafana + Vector keep owning
+# host/cluster infrastructure telemetry. See docs/signoz.md for the split.
+#
+# Deploy (from `nix develop`, with KUBECONFIG pointing at the box):
+#   just signoz-deploy       # namespace + helm stack + ingress layer
+#
+# Or manually:
+#   kubectl apply -f k8s/signoz/namespace.yaml
+#   helmfile sync --file k8s/signoz/helmfile.yaml
+#   kubectl apply -k k8s/signoz
+#
+# The chart installs: the Altinity ClickHouse operator + a 1-shard/1-replica
+# ClickHouse, Zookeeper (ClickHouse's coordination dependency), the SigNoz
+# query service/UI, the SigNoz OTel collector, and a schema-migration Job that
+# runs as a Helm hook on install/upgrade.
+#
+# Version policy: pin chart versions explicitly; read the release notes on
+# bumps (https://github.com/SigNoz/charts/releases). Chart and app versions
+# move together, so a chart bump is also a SigNoz upgrade — take the
+# `signoz-clickhouse` data volume seriously before doing one.
+
+repositories:
+  - name: signoz
+    url: https://charts.signoz.io
+
+helmDefaults:
+  wait: true
+  # ClickHouse + Zookeeper + the schema migrator take a while on a cold start
+  # (first install also pulls ~2GB of images over the tunnel), so allow 20min
+  # rather than helmfile's default 300s.
+  timeout: 1200
+  # Roll back automatically on a failed upgrade so a bad bump leaves the last
+  # known-good release rather than a half-migrated ClickHouse.
+  atomic: true
+  verify: false # upstream charts are unsigned
+
+releases:
+  - name: signoz
+    namespace: signoz
+    # The namespace is created by kustomize/`just signoz-deploy` first, with
+    # PodSecurity labels the chart doesn't know about.
+    createNamespace: false
+    chart: signoz/signoz
+    version: "0.140.0"
+    values:
+      - values.yaml
+      # ClickHouse password. The real value lives sops-encrypted in
+      # secrets/signoz.enc.yaml; `just signoz-deploy` decrypts it to this
+      # gitignored file right before `helmfile sync` (same pattern as the
+      # monitoring stack's values-secret.yaml).
+      - values-secret.yaml

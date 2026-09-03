@@ -1,0 +1,126 @@
+# values.yaml — signoz chart values for avocado.
+#
+# Tuned for a single-node k3s box with ~16GB RAM that is ALREADY running the
+# VictoriaMetrics stack, Immich, CARE and friends. The stock SigNoz values are
+# written for a dedicated cluster and set requests but no memory limits, which
+# on this box means ClickHouse can balloon until the kernel OOM-kills something
+# else. Every component below therefore gets an explicit ceiling, and
+# ClickHouse additionally gets a query-level memory cap (see `profiles`).
+#
+# Budget (limits): ClickHouse 2Gi + Zookeeper 512Mi + SigNoz 1Gi + collector
+# 1Gi = 4.5Gi worst case; steady-state usage at home-lab ingest volumes is
+# closer to 2-2.5Gi. Keep an eye on `just signoz-status` after any bump.
+#
+# Secret values (ClickHouse password) live in values-secret.yaml.
+# See all keys: helm show values signoz/signoz --version 0.140.0
+
+# Attached to every span/metric/log by the collector's resource detection
+# processor, so telemetry is identifiable if a second cluster ever ships here.
+clusterName: avocado
+
+# ===========================================================================
+# ClickHouse — the telemetry store (traces, logs, metrics)
+# ===========================================================================
+clickhouse:
+  enabled: true
+
+  # 20Gi on `local-path`, i.e. the ZFS rpool under /var. This is a NO-BACKUP,
+  # no-redundancy volume (see docs/storage.md) and the StorageClass reclaim
+  # policy is Delete — deleting the `signoz` namespace destroys the telemetry
+  # history. That is an accepted tradeoff: telemetry is regenerable, unlike the
+  # databases that get `local-path-retain`.
+  persistence:
+    enabled: true
+    size: 20Gi
+
+  resources:
+    requests:
+      cpu: "300m"
+      memory: "512Mi"
+    limits:
+      cpu: "2000m"
+      memory: "2Gi"
+
+  # Cap a single query at ~1.5GB — comfortably under the 2Gi container limit,
+  # so a heavy dashboard query fails with "memory limit exceeded" (recoverable)
+  # instead of getting the whole pod OOM-killed mid-insert (not recoverable
+  # without a restart, and it drops the in-flight batch).
+  profiles:
+    default/max_memory_usage: "1500000000"
+    # Spill GROUP BY to disk past ~750MB rather than failing outright.
+    default/max_bytes_before_external_group_by: "750000000"
+
+  # Zookeeper is ClickHouse's coordination dependency (the chart installs it
+  # even for a single replica, because SigNoz's schema uses replicated tables).
+  zookeeper:
+    resources:
+      requests:
+        cpu: "50m"
+        memory: "256Mi"
+      limits:
+        cpu: "500m"
+        memory: "512Mi"
+
+# ===========================================================================
+# SigNoz — query service + web UI
+# ===========================================================================
+signoz:
+  replicaCount: 1
+
+  env:
+    signoz_telemetrystore_provider: clickhouse
+    # No SMTP on this box, so team invitations by email are off. The first
+    # account is created through the signup screen on first visit; add further
+    # users by sharing the invite link the UI generates.
+    signoz_emailing_enabled: false
+    signoz_prometheus_active__query__tracker_enabled: false
+    signoz_alertmanager_provider: signoz
+    # Used to build absolute links in alert notifications. Points at the
+    # tailnet host because that is the only way in today (see ingress.yaml).
+    signoz_alertmanager_signoz_external__url: http://signoz.avocado.local
+
+  # SQLite for SigNoz's own metadata (dashboards, alert rules, users). Small,
+  # but losing it means re-creating every dashboard — 1Gi on local-path.
+  persistence:
+    enabled: true
+    size: 1Gi
+
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "256Mi"
+    limits:
+      cpu: "1000m"
+      memory: "1Gi"
+
+  # Ingress is NOT created by the chart — it lives in ingress.yaml so the
+  # tailnet/public host split stays in the kustomize layer with every other
+  # workload in this repo.
+  ingress:
+    enabled: false
+
+# ===========================================================================
+# OTel collector — the ingest endpoint applications point at
+# ===========================================================================
+otelCollector:
+  replicaCount: 1
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "256Mi"
+    limits:
+      cpu: "1000m"
+      memory: "1Gi"
+
+# ===========================================================================
+# Disabled sub-charts
+# ===========================================================================
+# Postgres/redpanda/otel-gateway belong to SigNoz's enterprise topology and are
+# already off by default; pinned here so a chart bump that flips a default
+# can't quietly add another database to this box.
+postgresql:
+  enabled: false
+signoz-otel-gateway:
+  enabled: false
+redpanda:
+  enabled: false

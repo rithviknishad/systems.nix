@@ -1,0 +1,23 @@
+---
+# namespace.yaml — the `signoz` namespace.
+#
+# Declared as a standalone manifest (not via helmfile's createNamespace) so the
+# PodSecurity labels are in place before any workload pod schedules — same
+# pattern as k8s/monitoring/namespace.yaml.
+#
+# `baseline` is enough here: unlike the VictoriaMetrics stack (which needs
+# `privileged` for node-exporter's hostPID/hostPath), nothing in SigNoz touches
+# the host. ClickHouse runs as uid/gid 101, the collector and query service as
+# ordinary unprivileged containers. `restricted` is only audited/warned because
+# the Altinity ClickHouse operator does not set `runAsNonRoot`/seccomp on every
+# pod it generates — tighten the enforce level if that ever changes upstream.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: signoz
+  labels:
+    pod-security.kubernetes.io/enforce: baseline
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+    app.kubernetes.io/part-of: signoz

@@ -1,0 +1,35 @@
+---
+# ingress.yaml — Traefik Ingress for the SigNoz web UI.
+#
+# TAILNET ONLY, deliberately. SigNoz has its own login (the first visitor
+# creates the admin account), but until that account exists the signup screen
+# is open to whoever can reach it — so the UI is not published through the
+# cloudflared tunnel. To go public later: add `signoz.rithviknishad.dev` as a
+# second host here, add the same name to modules/cloudflared.nix, run
+# `cloudflared tunnel route dns avocado signoz.rithviknishad.dev`, and create
+# the admin account BEFORE the route goes live (or put a Cloudflare Access app
+# in front, like esphome/ledger/onvif-console). See docs/signoz.md.
+#
+# Reach it over Tailscale with:
+#   curl -H 'Host: signoz.avocado.local' http://avocado/
+# or add `signoz.avocado.local -> <avocado tailnet IP>` to /etc/hosts and open
+# it in a browser (the SPA needs a real hostname, not a Host header).
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: signoz
+  namespace: signoz
+spec:
+  rules:
+    - host: signoz.avocado.local
+      http:
+        paths:
+          # The SigNoz service serves both the React UI and its /api routes on
+          # one origin, so a single prefix rule covers everything.
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: signoz
+                port:
+                  number: 8080

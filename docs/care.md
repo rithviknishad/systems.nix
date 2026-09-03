@@ -79,6 +79,22 @@ flowchart TB
   (`start.sh` → gunicorn), celery worker, and celery beat —
   **beat runs DB migrations** on start, mirroring upstream's compose
   ordering. The API 500s harmlessly until first migrations finish.
+- The API container's **requests/limits (500m/1Gi → 1 CPU/2Gi) and probe
+  timings** (`/ping/`, delay 70s, timeout 20s, period 10s, 5 failures) are
+  copied verbatim from the upstream **production** `care-be-api` deployment,
+  so throttling- and probe-sensitive behaviour reproduces here rather than
+  being masked by a more generous local budget. Don't "tune" them for this
+  box — divergence defeats the point. The worker and beat are left
+  unconstrained (this is a single-node box; only the API is being mirrored).
+- **`collectstatic` runs on every API pod start** (it's in upstream's
+  `start.sh`), because `STATIC_ROOT` is `/app/staticfiles` on the container's
+  ephemeral filesystem — nothing persists it between restarts. With
+  whitenoise's `CompressedManifestStaticFilesStorage` each start re-hashes and
+  re-compresses (brotli + gzip) ~1300 files. Measured here: **~62s for
+  collectstatic, ~84s from container start to gunicorn listening**. That is
+  what the 70s probe delay is paying for, and it leaves only ~35s of headroom
+  before liveness kills the container at ~120s — see the comment in
+  `k8s/care/care.yaml`.
 - **TeleICU gateway** authenticates to CARE with JWTs signed by its own
   `JWKS_BASE64` key set; CARE fetches the public half from the gateway's
   OpenID endpoint. There is no shared secret between the two.

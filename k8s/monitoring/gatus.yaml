@@ -171,6 +171,34 @@ data:
         alerts:
           - type: ntfy
 
+      # SigNoz query service (k8s/signoz) — the UI + query API. Probed via the
+      # in-cluster Service because signoz.avocado.local is tailnet-only and not
+      # resolvable from cluster DNS. /api/v1/health is the pod's own liveness
+      # path and needs no login, so it works without a token in this ConfigMap.
+      - name: signoz
+        group: internal
+        url: "http://signoz.signoz.svc:8080/api/v1/health"
+        interval: 1m
+        conditions:
+          - "[STATUS] == 200"
+        alerts:
+          - type: ntfy
+
+      # SigNoz OTel collector (k8s/signoz) — the INGEST half, probed separately
+      # from the query service above because the two fail independently: the UI
+      # can be perfectly healthy while every incoming span is being dropped.
+      # There is no service port for the collector's health extension, so this
+      # scrapes its Prometheus telemetry endpoint instead — a 200 there means
+      # the collector process is alive and serving.
+      - name: signoz-otel-collector
+        group: internal
+        url: "http://signoz-otel-collector.signoz.svc:8888/metrics"
+        interval: 1m
+        conditions:
+          - "[STATUS] == 200"
+        alerts:
+          - type: ntfy
+
       # --- Public endpoints (reachability + TLS expiry) ----------------------
       - name: rithviknishad.dev
         group: public
@@ -563,7 +591,7 @@ spec:
         # v26 was applied to the cluster as "HEAD + cpplus-cctv" only (the ntfy
         # probes below are staged but their service isn't deployed yet), so this
         # file must carry a HIGHER value or a full deploy won't roll the pod.
-        checksum/config: config-v27
+        checksum/config: config-v28
     spec:
       securityContext:
         runAsNonRoot: true

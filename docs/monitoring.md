@@ -13,6 +13,13 @@ push notifications. It lives in `k8s/monitoring/` and mirrors
 [`tellmeY18/retire.nix`](https://github.com/tellmeY18/retire.nix), trimmed to
 this single-node box.
 
+{: .note }
+> This page is about **infrastructure** telemetry — is the box healthy? For
+> **application** telemetry (traces/spans from instrumented services) there is a
+> separate [SigNoz](signoz.md) stack in `k8s/signoz/`. This stack watches that
+> one, not the reverse: Gatus probes both SigNoz halves and VMAgent scrapes its
+> collector, so a ClickHouse outage still has a watchdog outside itself.
+
 ## Big picture
 
 ```mermaid
@@ -186,7 +193,7 @@ group (`ui.default-sort-by: group`):
 
 | Group | Endpoints | "Up" means | ntfy topic |
 |---|---|---|---|
-| `internal` | Grafana / VMSingle / VictoriaLogs `/health`, ESPHome `/`, ntfy `/v1/health`, Pookalam vote `/`, the MCP servers (Kite `/`, Settle Up `/health`) | `[STATUS] == 200` | `avocado-alerts` |
+| `internal` | Grafana / VMSingle / VictoriaLogs `/health`, ESPHome `/`, ntfy `/v1/health`, Pookalam vote `/`, the MCP servers (Kite `/`, Settle Up `/health`), [SigNoz](signoz.md) query `/api/v1/health` + collector `/metrics` | `[STATUS] == 200` | `avocado-alerts` |
 | `public` | `rithviknishad.dev`, `photos.rithviknishad.dev` (Immich `/api/server/ping`), `kite.rithviknishad.dev` (`/healthz`), `ntfy.rithviknishad.dev` (`/v1/health`), `ohc-pookalam.rithviknishad.dev` (`/`) | 200 + body + TLS-expiry | `avocado-alerts` |
 | `ohcnetwork/care` | CARE public edges (`care-api /ping/`, SPA, gateway `/`, MFE `/health`) + in-cluster (MinIO, middleware, RTSPtoWeb) | 200 (+ TLS-expiry on public) | `avocado-alerts` |
 | `ohcnetwork/teleicu/cameras` | Mock PTZ camera (in-cluster + public edge) and the physical ONVIF cameras (`matrix-cctv`, `prama-cctv`, `cpplus-cctv`) as raw TCP connects to RTSP `:554` | mock: reachable + non-5xx; physical: `[CONNECTED] == true` | `avocado-alerts` |

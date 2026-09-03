@@ -39,6 +39,7 @@ you) holds a key that can open them.
 | `secrets/care-teleicu.enc.yaml` | admin + avocado | TeleICU gateway k8s Secret: Django key, gateway JWKS, Postgres + S3 credentials |
 | `secrets/kite.enc.yaml` | admin + avocado | Kite k8s Secret: JWT + encrypt keys, GitHub OAuth app id/secret, break-glass password |
 | `secrets/settle-up-mcp.enc.yaml` | admin + avocado | Settle Up MCP k8s Secret: account email + password, live Firebase Web API key, MCP bearer token |
+| `secrets/signoz.enc.yaml` | admin + avocado | SigNoz helm values fragment: the ClickHouse password |
 
 ## How the box consumes secrets
 
@@ -81,12 +82,19 @@ just secrets-rekey      # re-encrypt after changing recipients in .sops.yaml
 just passwd             # generate a SHA-512 hash to paste in (mkpasswd -m sha-512)
 ```
 
-There is also a parallel set of recipes for the monitoring secret file
-(`just mon-secrets*`).
+There is also a parallel set of recipes for the two helm values secrets
+(`just mon-secrets*`, `just signoz-secrets*`).
 
-## Deploy-time decryption (monitoring)
+## Deploy-time decryption (helm stacks)
 
 The Grafana admin password is **not** read by the box. Instead
 `just mon-deploy` decrypts `secrets/monitoring.enc.yaml` into the gitignored
 `k8s/monitoring/values-secret.yaml` on the admin machine, right before
 `helmfile sync`, and it's never committed. See [Monitoring](monitoring.md).
+
+`just signoz-deploy` does exactly the same with `secrets/signoz.enc.yaml` →
+`k8s/signoz/values-secret.yaml` (the ClickHouse password). Both are helm
+**values fragments** rather than k8s Secret manifests, because helm needs a file
+on disk rather than a stream — which is why these two get a gitignore entry each
+while every other workload pipes its decrypted Secret straight into `kubectl`.
+See [SigNoz](signoz.md).

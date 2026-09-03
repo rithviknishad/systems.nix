@@ -330,9 +330,33 @@ Settle Up backend, can delete real groups and transactions, and holds the
 account password.
 Documented on its own [Settle Up](settle-up-mcp.md) page.
 
+### SigNoz (OpenTelemetry APM) — `k8s/signoz/`
+
+[SigNoz](https://signoz.io) — distributed traces, logs and metrics from
+**instrumented applications**, stored in ClickHouse. Installed from the upstream
+Helm chart (`helmfile.yaml` + `values.yaml`), with a thin kustomize layer for
+the namespace, the Ingress and a `VMServiceScrape`. It is the second helmfile
+workload on the box, and by some margin the heaviest addition: ClickHouse +
+Zookeeper + the query service + an OTel collector, capped at ~4.5 Gi of memory
+limits between them because upstream ships no limits at all and this node is
+shared with everything above.
+
+It does **not** replace `k8s/monitoring` — that stack still owns host, disk and
+cluster telemetry, and in fact watches SigNoz (Gatus probes both the query and
+ingest halves; VMAgent scrapes the collector). Apps send OTLP to
+`signoz-otel-collector.signoz.svc:4317`. The UI is **tailnet-only**
+(`signoz.avocado.local`): SigNoz's first visitor creates the admin account, so
+it is not published through the tunnel. `just signoz-deploy`.
+Documented on its own [SigNoz](signoz.md) page.
+
 ## The monitoring workload
 
 The largest thing on the cluster is the observability stack under
 `k8s/monitoring/` (VictoriaMetrics + Grafana + logs + uptime). It has its own
 deploy flow (helmfile + kustomize) and is documented separately on the
 [Monitoring](monitoring.md) page.
+
+`k8s/signoz/` is the second-largest, and the second helmfile-based workload:
+ClickHouse + Zookeeper + an OTel collector + the SigNoz query service, for
+**application** traces/logs/metrics. It is documented on its own
+[SigNoz](signoz.md) page.
