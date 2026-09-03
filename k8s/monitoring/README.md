@@ -22,6 +22,8 @@ Helm chart (via `helmfile.yaml` + `values.yaml`) installs:
 | **VictoriaLogs** | log database (30d retention on `local-path`) |
 | **Vector** | per-node DaemonSet shipping pod logs → VictoriaLogs |
 | **Gatus** | synthetic uptime probing → ntfy.sh |
+| **speedtest-exporter** | Ookla speed test every 15m → `speedtest_*` metrics |
+| **blackbox-exporter** | external HTTP/DNS probes → `probe_*` metrics |
 
 The kustomize layer (`kustomization.yaml`) adds avocado-specific glue that the
 chart doesn't own:
@@ -34,6 +36,9 @@ chart doesn't own:
 - `pvc-storage-vmrules.yaml` — PVC capacity alerts.
 - `cadvisor-vmnodescrape.yaml` — per-container metrics from the kubelet.
 - `gatus.yaml` — synthetic uptime probing → ntfy (replaces Cloudprober).
+- `speedtest-exporter.yaml` + `blackbox-exporter.yaml` +
+  `internet-vmrules.yaml` + `internet-grafana-dashboard.yaml` — internet
+  connection monitoring, ported off a Raspberry Pi (see below).
 - `victorialogs.yaml` + `vector.yaml` — log store + per-node log collector.
 - `victorialogs-datasource.yaml` — Grafana logs datasource (needs the
   `victoriametrics-logs-datasource` plugin, added via `grafana.plugins`).
@@ -161,7 +166,7 @@ into four blocks:
 
 | Group | Endpoints | "Up" means | ntfy topic |
 |---|---|---|---|
-| `internal` | Grafana / VMSingle / VictoriaLogs `/health`, ESPHome `/`, SigNoz query `/api/v1/health` + collector `/metrics` | `[STATUS] == 200` | `avocado-alerts` |
+| `internal` | Grafana / VMSingle / VictoriaLogs `/health`, blackbox-exporter `/-/healthy`, ESPHome `/`, SigNoz query `/api/v1/health` + collector `/metrics` | `[STATUS] == 200` | `avocado-alerts` |
 | `public` | `rithviknishad.dev`, `photos.rithviknishad.dev` (Immich `/api/server/ping`) | 200 + body + TLS-expiry | `avocado-alerts` |
 | `ABDM-SBX` | ABDM **sandbox**: NHPR / ABHA / HIECM | reachable + non-5xx | `avocado-abdm` (prio 4) |
 | `ABDM-LIVE` | ABDM **live**: NHPR / ABHA / HIECM | reachable + non-5xx | `avocado-abdm` (prio 5) |
@@ -180,6 +185,40 @@ http://avocado`, or `just mon-gatus`. To add/edit checks, edit the `gatus-config
 ConfigMap in `gatus.yaml`, bump its `checksum/config` annotation, and
 `kubectl apply -f k8s/monitoring/gatus.yaml` (Gatus is config-driven — there is
 no admin UI).
+
+## Internet connection (speedtest + blackbox)
+
+The k8s port of [geerlingguy/internet-pi](https://github.com/geerlingguy/internet-pi)
+(from Jeff Geerling's ["Monitor your Internet with a Raspberry
+Pi"](https://www.jeffgeerling.com/blog/2021/monitor-your-internet-raspberry-pi/)),
+minus the Pi: no dedicated host, no second Prometheus/Grafana — just two
+exporters scraped by the VMAgent that's already here.
+
+| Manifest | What it does |
+|---|---|
+| `speedtest-exporter.yaml` | Deployment + Service + VMServiceScrape. **Every scrape runs a real Ookla test**, so the scrape `interval` (15m) is the test schedule. |
+| `blackbox-exporter.yaml` | Deployment + Service + two `VMProbe`s: HTTP against google/cloudflare/github every 30s, DNS against 1.1.1.1/8.8.8.8 every 1m. |
+| `internet-vmrules.yaml` | `InternetDown`, `InternetDNSDown`, `InternetTargetUnreachable`, `InternetHighLatency`, `SpeedtestNotReporting`, `SpeedtestFailing`, `InternetDownloadSlow`, `InternetUploadSlow`, `InternetLatencyHigh`. |
+| `internet-grafana-dashboard.yaml` | "Internet Connection" dashboard (avocado folder, uid `internet-connection`). |
+
+Things to know before editing:
+
+- **Data usage.** Each speed test moves real traffic — hundreds of MB on a fast
+  link. 15m ≈ 96 tests/day (internet-pi ships 30m). Raise `interval` in the
+  `VMServiceScrape` if the connection is metered, and drop
+  `SPEEDTEST_CACHE_FOR` below the new interval.
+- **Speed thresholds are placeholders** (50 Mbit/s down, 20 Mbit/s up). To
+  retune: edit `InternetDownloadSlow` / `InternetUploadSlow` in
+  `internet-vmrules.yaml` (values are in bits/s, e.g. `300e6` for 300 Mbit/s)
+  and `just mon-deploy`. ~70% of the advertised tier is a sane starting point.
+- **15m samples vs. a 5m lookbehind.** Instant queries on `speedtest_*`
+  return nothing between tests, so every panel and alert wraps them in
+  `last_over_time()` / `avg_over_time()`. Keep that shape.
+- **No ICMP module**: it needs `CAP_NET_RAW`, which PodSecurity `baseline`
+  flags. Layered HTTP + DNS probes isolate the failure just as well (and
+  internet-pi's "ping" job is HTTP under the hood too).
+- To pin the Ookla server (removes server-choice variance between runs),
+  uncomment `SPEEDTEST_SERVER` in `speedtest-exporter.yaml`.
 
 ## Logs (VictoriaLogs + Vector)
 
@@ -214,3 +253,5 @@ the provisioned *VictoriaLogs* datasource, or via `just mon-logs`
             (see "Grafana SSO via Cloudflare Access").
 - [x] **SMART disk health** — `smartctl`/`smartmon` textfile metrics + alerts
       (`modules/monitoring.nix` + `smart-vmrules.yaml`).
+- [x] **Internet connection** — speedtest + blackbox exporters, alerts and a
+      dashboard, ported from `geerlingguy/internet-pi`.

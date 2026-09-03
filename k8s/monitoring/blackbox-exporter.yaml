@@ -1,0 +1,206 @@
+---
+# blackbox-exporter.yaml — external reachability + latency probing.
+#
+# The other half of the geerlingguy/internet-pi port (see
+# speedtest-exporter.yaml): internet-pi runs blackbox-exporter next to its
+# speedtest container and points a Prometheus `ping` job at a list of hosts.
+# Here the same thing is expressed natively as VMProbe objects, which the
+# VM operator turns into scrape jobs on VMAgent.
+#
+# Why this exists next to Gatus: Gatus answers "is MY service up?" and pushes
+# to ntfy; blackbox answers "is MY INTERNET up, and how slow is it right now?"
+# against third-party anchors, as time series you can graph next to the
+# speedtest results. Blackbox failures are also strictly external — a Gatus
+# probe of an in-cluster Service stays green through a total WAN outage.
+#
+# Deliberately NO icmp module: ICMP probing needs CAP_NET_RAW, which PodSecurity
+# `baseline` (audited in this namespace) flags. HTTP + DNS probes need no
+# capabilities and, layered, isolate the failure anyway — DNS up + HTTP down is
+# a very different story from both down. internet-pi's "ping" job is likewise
+# HTTP under the hood.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: blackbox-exporter-config
+  namespace: monitoring
+data:
+  blackbox.yml: |
+    modules:
+      # Plain HTTPS GET; success = a 2xx within the timeout.
+      http_2xx:
+        prober: http
+        timeout: 10s
+        http:
+          valid_http_versions: ["HTTP/1.1", "HTTP/2.0"]
+          # Pin to IPv4: this box has no IPv6 upstream, and without the pin a
+          # failed AAAA attempt shows up as latency on every probe.
+          preferred_ip_protocol: ip4
+          ip_protocol_fallback: false
+          follow_redirects: true
+
+      # Resolves a name against the target resolver over UDP/53. Isolates
+      # "DNS is broken" from "the link is down".
+      dns_udp:
+        prober: dns
+        timeout: 5s
+        dns:
+          query_name: "www.google.com"
+          query_type: "A"
+          preferred_ip_protocol: ip4
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: blackbox-exporter
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: blackbox-exporter
+    app.kubernetes.io/component: internet-monitoring
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: blackbox-exporter
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: blackbox-exporter
+      annotations:
+        # Bump on every ConfigMap edit — blackbox reloads config only on
+        # SIGHUP or restart, so without this the pod keeps the old modules.
+        checksum/config: config-v1
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: blackbox-exporter
+          image: quay.io/prometheus/blackbox-exporter:v0.28.0
+          args:
+            - --config.file=/config/blackbox.yml
+            - --web.listen-address=:9115
+          ports:
+            - name: http
+              containerPort: 9115
+          readinessProbe:
+            httpGet:
+              path: /-/healthy
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 30
+          livenessProbe:
+            httpGet:
+              path: /-/healthy
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 60
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: "25m"
+              memory: "32Mi"
+            limits:
+              cpu: "200m"
+              memory: "128Mi"
+          volumeMounts:
+            - name: config
+              mountPath: /config
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: blackbox-exporter-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: blackbox-exporter
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: blackbox-exporter
+spec:
+  selector:
+    app.kubernetes.io/name: blackbox-exporter
+  ports:
+    - name: http
+      port: 9115
+      targetPort: http
+---
+# The exporter's OWN metrics (build info, module failures, `up`) — distinct
+# from the probe_* series, which arrive via the VMProbes below.
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMServiceScrape
+metadata:
+  name: blackbox-exporter
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: blackbox-exporter
+    app.kubernetes.io/component: internet-monitoring
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: blackbox-exporter
+  endpoints:
+    - port: http
+      path: /metrics
+---
+# HTTP reachability of well-known third-party anchors. Three independent
+# networks/CDNs so one provider's bad day doesn't read as "internet down".
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMProbe
+metadata:
+  name: internet-http
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: blackbox-exporter
+    app.kubernetes.io/component: internet-monitoring
+spec:
+  jobName: internet-http
+  module: http_2xx
+  vmProberSpec:
+    url: blackbox-exporter.monitoring.svc:9115
+    scheme: http
+    path: /probe
+  # Cheap checks, so run them often — this is the fine-grained view that shows
+  # latency spikes between the hourly speed tests.
+  interval: 30s
+  scrapeTimeout: 15s
+  targets:
+    staticConfig:
+      targets:
+        - https://www.google.com
+        - https://www.cloudflare.com
+        - https://github.com
+---
+# DNS resolution against the two public resolvers. Splits "name resolution
+# broken" out of a generic HTTP failure.
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMProbe
+metadata:
+  name: internet-dns
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: blackbox-exporter
+    app.kubernetes.io/component: internet-monitoring
+spec:
+  jobName: internet-dns
+  module: dns_udp
+  vmProberSpec:
+    url: blackbox-exporter.monitoring.svc:9115
+    scheme: http
+    path: /probe
+  interval: 1m
+  scrapeTimeout: 15s
+  targets:
+    staticConfig:
+      targets:
+        - 1.1.1.1
+        - 8.8.8.8

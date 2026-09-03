@@ -1,0 +1,416 @@
+---
+# internet-grafana-dashboard.yaml — "Internet Connection" Grafana dashboard.
+#
+# The avocado equivalent of internet-pi's bundled Grafana dashboard, rebuilt
+# against this stack's datasource variable (the upstream JSON hardcodes its own
+# Prometheus uid) and against VictoriaMetrics' query semantics.
+#
+# Grafana's sidecar auto-imports ConfigMaps labelled `grafana_dashboard: "1"`;
+# `grafana_folder` files it under the avocado folder.
+#
+# Why every speedtest panel wraps its metric in last_over_time(): those samples
+# arrive every 15 minutes, outside VictoriaMetrics' 5m lookbehind, so a bare
+# `speedtest_download_bits_per_second` renders as an empty panel between tests.
+# The blackbox probe_* panels query the metric directly — those scrape every
+# 30s and need no such trick.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: internet-grafana-dashboard
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+    app.kubernetes.io/name: internet-monitoring
+    app.kubernetes.io/component: dashboard
+    app.kubernetes.io/part-of: victoria-metrics-k8s-stack
+    app.kubernetes.io/managed-by: kustomize
+  annotations:
+    grafana_folder: "avocado"
+data:
+  internet-dashboard.json: |
+    {
+      "annotations": { "list": [] },
+      "editable": true,
+      "fiscalYearStartMonth": 0,
+      "graphTooltip": 1,
+      "links": [],
+      "panels": [
+        {
+          "title": "Download",
+          "type": "stat",
+          "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "targets": [
+            {
+              "expr": "last_over_time(speedtest_download_bits_per_second[1h])",
+              "instant": true,
+              "legendFormat": "down",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "bps",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "value": null, "color": "red" },
+                  { "value": 50000000, "color": "yellow" },
+                  { "value": 100000000, "color": "green" }
+                ]
+              }
+            }
+          },
+          "options": {
+            "colorMode": "value",
+            "graphMode": "none",
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+          }
+        },
+        {
+          "title": "Upload",
+          "type": "stat",
+          "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "targets": [
+            {
+              "expr": "last_over_time(speedtest_upload_bits_per_second[1h])",
+              "instant": true,
+              "legendFormat": "up",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "bps",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "value": null, "color": "red" },
+                  { "value": 20000000, "color": "yellow" },
+                  { "value": 50000000, "color": "green" }
+                ]
+              }
+            }
+          },
+          "options": {
+            "colorMode": "value",
+            "graphMode": "none",
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+          }
+        },
+        {
+          "title": "Latency (idle)",
+          "type": "stat",
+          "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "targets": [
+            {
+              "expr": "last_over_time(speedtest_ping_latency_milliseconds[1h])",
+              "instant": true,
+              "legendFormat": "ping",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "ms",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "value": null, "color": "green" },
+                  { "value": 50, "color": "yellow" },
+                  { "value": 100, "color": "red" }
+                ]
+              }
+            }
+          },
+          "options": {
+            "colorMode": "value",
+            "graphMode": "none",
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+          }
+        },
+        {
+          "title": "Jitter",
+          "type": "stat",
+          "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "targets": [
+            {
+              "expr": "last_over_time(speedtest_jitter_latency_milliseconds[1h])",
+              "instant": true,
+              "legendFormat": "jitter",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "ms",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "value": null, "color": "green" },
+                  { "value": 10, "color": "yellow" },
+                  { "value": 30, "color": "red" }
+                ]
+              }
+            }
+          },
+          "options": {
+            "colorMode": "value",
+            "graphMode": "none",
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+          }
+        },
+        {
+          "title": "Throughput over time",
+          "description": "Ookla speed test every 15 minutes. Flat segments are expected — one sample per test, held until the next.",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "targets": [
+            {
+              "expr": "last_over_time(speedtest_download_bits_per_second[30m])",
+              "legendFormat": "download",
+              "refId": "A"
+            },
+            {
+              "expr": "last_over_time(speedtest_upload_bits_per_second[30m])",
+              "legendFormat": "upload",
+              "refId": "B"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "bps",
+              "min": 0,
+              "custom": { "fillOpacity": 10, "lineWidth": 2, "lineInterpolation": "stepAfter", "spanNulls": true }
+            }
+          }
+        },
+        {
+          "title": "Latency & jitter over time",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "targets": [
+            {
+              "expr": "last_over_time(speedtest_ping_latency_milliseconds[30m])",
+              "legendFormat": "ping",
+              "refId": "A"
+            },
+            {
+              "expr": "last_over_time(speedtest_jitter_latency_milliseconds[30m])",
+              "legendFormat": "jitter",
+              "refId": "B"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "ms",
+              "min": 0,
+              "custom": { "fillOpacity": 5, "lineWidth": 2, "lineInterpolation": "stepAfter", "spanNulls": true }
+            }
+          }
+        },
+        {
+          "title": "Reachability (HTTP probes)",
+          "description": "1 = the anchor answered 2xx. All three at 0 together means the WAN, not the sites.",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "targets": [
+            {
+              "expr": "probe_success{job=\"internet-http\"}",
+              "legendFormat": "{{ instance }}",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "min": 0,
+              "max": 1,
+              "custom": { "fillOpacity": 20, "lineWidth": 1, "drawStyle": "line", "lineInterpolation": "stepAfter" }
+            }
+          }
+        },
+        {
+          "title": "HTTP probe duration",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "targets": [
+            {
+              "expr": "probe_duration_seconds{job=\"internet-http\"}",
+              "legendFormat": "{{ instance }}",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s",
+              "min": 0,
+              "custom": { "fillOpacity": 5, "lineWidth": 2 }
+            }
+          }
+        },
+        {
+          "title": "HTTP timing breakdown (avg of all anchors)",
+          "description": "Which phase costs the time: DNS resolve, TCP connect, TLS handshake, or the server processing.",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 20 },
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "targets": [
+            {
+              "expr": "avg by (phase) (probe_http_duration_seconds{job=\"internet-http\"})",
+              "legendFormat": "{{ phase }}",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s",
+              "min": 0,
+              "custom": { "fillOpacity": 20, "lineWidth": 1, "stacking": { "mode": "normal" } }
+            }
+          }
+        },
+        {
+          "title": "DNS resolver response time",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 20 },
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "targets": [
+            {
+              "expr": "probe_duration_seconds{job=\"internet-dns\"}",
+              "legendFormat": "{{ instance }}",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s",
+              "min": 0,
+              "custom": { "fillOpacity": 5, "lineWidth": 2 }
+            }
+          }
+        },
+        {
+          "title": "Availability over selected range",
+          "type": "stat",
+          "gridPos": { "h": 4, "w": 8, "x": 0, "y": 28 },
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "targets": [
+            {
+              "expr": "avg_over_time(probe_success{job=\"internet-http\"}[$__range])",
+              "instant": true,
+              "legendFormat": "{{ instance }}",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit",
+              "min": 0,
+              "max": 1,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "value": null, "color": "red" },
+                  { "value": 0.99, "color": "yellow" },
+                  { "value": 0.999, "color": "green" }
+                ]
+              }
+            }
+          },
+          "options": {
+            "colorMode": "value",
+            "graphMode": "none",
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+          }
+        },
+        {
+          "title": "Speed tests succeeded",
+          "type": "stat",
+          "gridPos": { "h": 4, "w": 8, "x": 8, "y": 28 },
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "targets": [
+            {
+              "expr": "avg_over_time(speedtest_up[$__range])",
+              "instant": true,
+              "legendFormat": "ok",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit",
+              "min": 0,
+              "max": 1,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "value": null, "color": "red" },
+                  { "value": 0.8, "color": "yellow" },
+                  { "value": 0.95, "color": "green" }
+                ]
+              }
+            }
+          },
+          "options": {
+            "colorMode": "value",
+            "graphMode": "none",
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+          }
+        },
+        {
+          "title": "Ookla server ID (last test)",
+          "description": "Changes here often explain a step change in throughput — pin SPEEDTEST_SERVER to remove that variable.",
+          "type": "stat",
+          "gridPos": { "h": 4, "w": 8, "x": 16, "y": 28 },
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "targets": [
+            {
+              "expr": "last_over_time(speedtest_server_id[1h])",
+              "instant": true,
+              "legendFormat": "server",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "none",
+              "decimals": 0,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [{ "value": null, "color": "text" }]
+              }
+            }
+          },
+          "options": {
+            "colorMode": "none",
+            "graphMode": "none",
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+          }
+        }
+      ],
+      "schemaVersion": 39,
+      "tags": ["internet", "speedtest", "blackbox"],
+      "templating": {
+        "list": [
+          {
+            "name": "datasource",
+            "type": "datasource",
+            "query": "prometheus",
+            "current": { "selected": true, "text": "Prometheus", "value": "prometheus" }
+          }
+        ]
+      },
+      "time": { "from": "now-24h", "to": "now" },
+      "timezone": "",
+      "title": "Internet Connection",
+      "uid": "internet-connection",
+      "version": 1
+    }

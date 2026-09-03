@@ -114,6 +114,7 @@ just generations
 | `just mon-logs` | port-forward VictoriaLogs → `:9428` |
 | `just mon-ntfy-logs` | tail the ntfy bridge |
 | `just mon-ntfy-test [topic]` | send a test push |
+| `just mon-speedtest` | print the latest internet speedtest results |
 | `just mon-destroy` | remove the CR layer + helm release |
 
 ### SigNoz (APM)

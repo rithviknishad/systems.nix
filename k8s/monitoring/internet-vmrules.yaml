@@ -1,0 +1,173 @@
+---
+# internet-vmrules.yaml — alerts for the internet-monitoring exporters.
+#
+# Sources: speedtest-exporter.yaml (a speed test every 15m) and
+# blackbox-exporter.yaml (30s HTTP / 1m DNS probes).
+#
+# THE STALENESS TRAP: speedtest samples land every 15 minutes, but VMAlert
+# evaluates every 30s with a 5m lookbehind. A naive `speedtest_up == 0` would
+# see "no data" for 10 of every 15 minutes and never fire dependably. Every
+# speedtest rule below therefore aggregates over a range
+# (avg_over_time/max_over_time/absent_over_time) instead of reading an instant
+# value. Keep that shape when editing.
+#
+# Delivery note: when the WAN really is down, the ntfy push can't leave the
+# box either. Alertmanager retries, so these arrive as a burst once
+# connectivity returns — the value is the timeline, not a live page.
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMRule
+metadata:
+  name: internet-alerts
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: internet-monitoring
+    app.kubernetes.io/component: alerting
+    app.kubernetes.io/part-of: victoria-metrics-k8s-stack
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  groups:
+    - name: internet-reachability
+      rules:
+        - alert: InternetDown
+          # EVERY external HTTP anchor failing at once — three unrelated
+          # networks don't break simultaneously, so this is the WAN (or the
+          # box's egress), not the sites.
+          expr: |-
+            sum(probe_success{job="internet-http"}) == 0
+          for: 3m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Internet appears to be DOWN"
+            description: >-
+              All external HTTP probes (google/cloudflare/github) have failed
+              for 3 minutes. Either the WAN link is down or the cluster lost
+              egress. Check the router first, then
+              `kubectl -n monitoring logs deploy/blackbox-exporter`.
+
+        - alert: InternetDNSDown
+          expr: |-
+            sum(probe_success{job="internet-dns"}) == 0
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Public DNS resolution is failing"
+            description: >-
+              Neither 1.1.1.1 nor 8.8.8.8 answered a UDP/53 query for 5
+              minutes. If the HTTP probes are still green, something is
+              blocking or hijacking DNS rather than the link being down.
+
+        - alert: InternetTargetUnreachable
+          # One anchor down while the others are fine — usually that site, not
+          # us. Long `for` so a single bad deploy on their side stays quiet.
+          expr: |-
+            probe_success{job="internet-http"} == 0
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "External probe failing: {{ $labels.instance }}"
+            description: >-
+              {{ $labels.instance }} has failed its HTTP probe for 15 minutes
+              while other anchors are reachable — likely a problem at that
+              endpoint, or selective filtering upstream.
+
+        - alert: InternetHighLatency
+          expr: |-
+            avg_over_time(probe_duration_seconds{job="internet-http"}[15m]) > 2
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Slow responses from {{ $labels.instance }}"
+            description: >-
+              End-to-end HTTP probe time to {{ $labels.instance }} has averaged
+              {{ $value | printf "%.2f" }}s over 15 minutes (>2s). Congestion,
+              a degraded link, or a saturated uplink.
+
+    - name: internet-speedtest
+      rules:
+        - alert: SpeedtestNotReporting
+          # Covers exporter crash-loop, scrape failure and CRD misconfig in one
+          # rule, without depending on the generated `job` label of `up`.
+          expr: |-
+            absent_over_time(speedtest_up[1h])
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "No speedtest results for an hour"
+            description: >-
+              speedtest_up has had no samples for 1h (expected every 15m).
+              Check `kubectl -n monitoring get pods -l
+              app.kubernetes.io/name=speedtest-exporter` and the VMAgent
+              targets page.
+
+        - alert: SpeedtestFailing
+          # Exporter is alive and being scraped, but every test errored out.
+          expr: |-
+            max_over_time(speedtest_up[1h]) == 0
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Every speed test in the last hour failed"
+            description: >-
+              The Ookla CLI returned an error or timed out on all recent runs.
+              Often an unreachable/overloaded test server — pin
+              SPEEDTEST_SERVER, or look at
+              `kubectl -n monitoring logs deploy/speedtest-exporter`.
+
+        # ---------------------------------------------------------------
+        # TUNE THESE TWO TO YOUR PLAN — they ship as placeholders. A common
+        # starting point is ~70% of the advertised tier; they're set well
+        # below a typical broadband plan on purpose, because the point is
+        # catching a link that has genuinely degraded, not litigating the last
+        # 10% with the ISP. Edit the numbers below and `just mon-deploy`.
+        # Averaged over 6h (~24 samples at the 15m cadence) so one bad test
+        # can't page you, and gated on speedtest_up so a run of failed tests
+        # reports as SpeedtestFailing above instead of "the internet got slow".
+        # ---------------------------------------------------------------
+        - alert: InternetDownloadSlow
+          expr: |-
+            avg_over_time(speedtest_download_bits_per_second[6h]) < 50e6
+              and avg_over_time(speedtest_up[6h]) > 0.5
+          for: 30m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Download speed degraded"
+            description: >-
+              Download has averaged {{ $value | humanize }}bit/s over the last
+              6 hours (threshold 50 Mbit/s). Compare against the Internet
+              Connection dashboard before calling the ISP.
+
+        - alert: InternetUploadSlow
+          expr: |-
+            avg_over_time(speedtest_upload_bits_per_second[6h]) < 20e6
+              and avg_over_time(speedtest_up[6h]) > 0.5
+          for: 30m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Upload speed degraded"
+            description: >-
+              Upload has averaged {{ $value | humanize }}bit/s over the last 6
+              hours (threshold 20 Mbit/s). Uploads matter here — Immich sync,
+              backups and the cloudflared tunnel all push out.
+
+        - alert: InternetLatencyHigh
+          expr: |-
+            avg_over_time(speedtest_ping_latency_milliseconds[6h]) > 100
+              and avg_over_time(speedtest_up[6h]) > 0.5
+          for: 30m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Internet latency is high"
+            description: >-
+              Idle latency to the nearest speedtest server has averaged
+              {{ $value | printf "%.0f" }}ms over 6 hours (>100ms). Sustained
+              high latency with normal throughput usually means bufferbloat or
+              an upstream reroute.

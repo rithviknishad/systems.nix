@@ -1,0 +1,154 @@
+---
+# speedtest-exporter.yaml — Ookla speedtest results as Prometheus metrics.
+#
+# The k8s port of the speedtest half of geerlingguy/internet-pi (Jeff
+# Geerling's "Monitor your Internet with a Raspberry Pi"): instead of a
+# dedicated Pi running docker-compose with its own Prometheus + Grafana, the
+# exporter is a plain Deployment here and the existing VMAgent/VMSingle/Grafana
+# stack does the scraping, storing and graphing.
+#
+# HOW IT WORKS: every scrape of /metrics makes the exporter shell out to the
+# official Ookla CLI and run a REAL speed test. The scrape interval IS the test
+# interval — hence the unusual VMServiceScrape settings at the bottom.
+#
+# Gotchas baked in:
+#   - Each test moves real data (hundreds of MB on a fast link). At 15m that's
+#     ~96 tests/day, which on a fast link is tens of GB/day. internet-pi
+#     defaults to 30m. Raise `interval` if the connection is metered or has
+#     an FUP.
+#   - A test takes ~30s, so the scrape timeout has to be generous, and
+#     SPEEDTEST_TIMEOUT must stay UNDER it — otherwise vmagent gives up first
+#     and the CLI keeps burning bandwidth for a sample nobody records.
+#   - Samples arrive at most every 15 minutes, which is still well outside
+#     VictoriaMetrics' 5m staleness window. Any instant query (Grafana stat
+#     panel, alert expression) must wrap these metrics in
+#     last_over_time()/avg_over_time() or it silently returns nothing — see
+#     internet-vmrules.yaml and internet-grafana-dashboard.yaml.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: speedtest-exporter
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: speedtest-exporter
+    app.kubernetes.io/component: internet-monitoring
+spec:
+  replicas: 1
+  # Recreate, not RollingUpdate: two exporters alive at once would run two
+  # speed tests that compete for the same link and report half the truth.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: speedtest-exporter
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: speedtest-exporter
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        # The image's USER is the NAME `speedtest`, not a uid, and kubelet
+        # refuses to start a runAsNonRoot container it can't prove is non-root
+        # ("image has non-numeric user"). Pin the uid `adduser -D speedtest`
+        # hands out on Alpine so the check can pass.
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: speedtest-exporter
+          # Last upstream release (v3.5.4, 2023) — the project is quiet but the
+          # image still bundles a working Ookla CLI 1.2.0.
+          image: ghcr.io/miguelndecarvalho/speedtest-exporter:v3.5.4
+          env:
+            - name: SPEEDTEST_PORT
+              value: "9798"
+            # Kill a hung CLI before vmagent's 60s scrape timeout fires, so a
+            # stuck test surfaces as speedtest_up=0 rather than a scrape error.
+            - name: SPEEDTEST_TIMEOUT
+              value: "55"
+            # Serve a cached result for just under the 15m scrape cadence, so
+            # the scheduled scrape always gets a fresh test but anything else
+            # curling /metrics reuses the last one instead of competing for
+            # bandwidth. Keep this BELOW the scrape interval.
+            - name: SPEEDTEST_CACHE_FOR
+              value: "800"
+            # Pin a server ID here to remove server-choice variance between
+            # runs (find one at https://www.speedtest.net/servers):
+            # - name: SPEEDTEST_SERVER
+            #   value: "12345"
+          ports:
+            - name: http
+              containerPort: 9798
+          # No HTTP probes: the only endpoints are `/` and `/metrics`, and
+          # probing /metrics would trigger an extra speed test every few
+          # seconds. Liveness is covered by the `up` metric (see
+          # SpeedtestExporterDown in internet-vmrules.yaml).
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "64Mi"
+            limits:
+              # Deliberately roomy: a tight CPU limit throttles the CLI and
+              # makes the link look slower than it is, which is the one thing
+              # this exporter exists to measure.
+              cpu: "1500m"
+              memory: "256Mi"
+          volumeMounts:
+            # The Ookla CLI persists its license acceptance under $HOME and
+            # scratch files in /tmp; both must be writable even with a
+            # read-only root filesystem.
+            - name: home
+              mountPath: /home/speedtest
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: home
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: speedtest-exporter
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: speedtest-exporter
+spec:
+  selector:
+    app.kubernetes.io/name: speedtest-exporter
+  ports:
+    - name: http
+      port: 9798
+      targetPort: http
+---
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMServiceScrape
+metadata:
+  name: speedtest-exporter
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: speedtest-exporter
+    app.kubernetes.io/component: internet-monitoring
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: speedtest-exporter
+  endpoints:
+    - port: http
+      path: /metrics
+      # THIS is the knob that controls how often a speed test runs (and how
+      # much data it burns) — not a cheap scrape. internet-pi ships 30m.
+      # If you change it, drop SPEEDTEST_CACHE_FOR below the new value too.
+      interval: 15m
+      # A full test is ~30s; the global 30s scrape timeout would cut every
+      # single one short.
+      scrapeTimeout: 60s

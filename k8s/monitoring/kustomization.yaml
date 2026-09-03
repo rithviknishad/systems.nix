@@ -16,6 +16,8 @@
 #   - Backup freshness alerts (backups fail silently; see backup-vmrules.yaml).
 #   - Gatus uptime probing -> ntfy (replaces the reference's Cloudprober).
 #   - VictoriaLogs + Vector log pipeline + a Grafana logs datasource.
+#   - Internet monitoring (speedtest + blackbox probes), ported from
+#     geerlingguy/internet-pi off its Raspberry Pi onto this cluster.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
@@ -44,6 +46,11 @@ resources:
   - cadvisor-vmnodescrape.yaml
   # Uptime: synthetic probing of internal + public endpoints -> ntfy.
   - gatus.yaml
+  # Internet connection: hourly Ookla speed tests + external HTTP/DNS probes.
+  - speedtest-exporter.yaml
+  - blackbox-exporter.yaml
+  - internet-vmrules.yaml
+  - internet-grafana-dashboard.yaml
   # Logs: VictoriaLogs store + Vector collector + Grafana datasource.
   - victorialogs.yaml
   - vector.yaml

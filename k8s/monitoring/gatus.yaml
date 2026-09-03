@@ -85,6 +85,22 @@ data:
         alerts:
           - type: ntfy
 
+      # blackbox-exporter (k8s/monitoring/blackbox-exporter.yaml) — the probe
+      # engine behind the internet-connection metrics. Its own liveness is a
+      # blind spot otherwise: if it dies, probe_success just stops existing
+      # rather than going to 0. Deliberately NOT probing speedtest-exporter
+      # alongside it — every HTTP hit on its /metrics kicks off a real Ookla
+      # test; that one is covered by SpeedtestNotReporting in
+      # internet-vmrules.yaml instead.
+      - name: blackbox-exporter
+        group: internal
+        url: "http://blackbox-exporter.monitoring.svc:9115/-/healthy"
+        interval: 1m
+        conditions:
+          - "[STATUS] == 200"
+        alerts:
+          - type: ntfy
+
       # ESPHome dashboard (hostNetwork pod — see k8s/esphome). No /health
       # endpoint; a 200 on / means the dashboard is alive. Probed via the
       # in-cluster Service, NOT the public URL, so Cloudflare Access (which
@@ -591,7 +607,7 @@ spec:
         # v26 was applied to the cluster as "HEAD + cpplus-cctv" only (the ntfy
         # probes below are staged but their service isn't deployed yet), so this
         # file must carry a HIGHER value or a full deploy won't roll the pod.
-        checksum/config: config-v28
+        checksum/config: config-v29
     spec:
       securityContext:
         runAsNonRoot: true

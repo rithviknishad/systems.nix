@@ -39,7 +39,7 @@ with **sops-nix**.
 | [Secrets: sops-nix](secrets.md) | Encryption model, keys, and how the box decrypts them |
 | [Networking](networking.md) | Tailscale, Cloudflare Tunnel, firewall, ingress routing |
 | [Kubernetes (k3s)](kubernetes.md) | The cluster, Immich, and the sample workload |
-| [Monitoring](monitoring.md) | VictoriaMetrics, Grafana, alerts, logs, uptime |
+| [Monitoring](monitoring.md) | VictoriaMetrics, Grafana, alerts, logs, uptime, internet |
 | [Deployment & operations](deployment.md) | Install, day-2 workflow, full `just` reference |
 
 ## Repository layout

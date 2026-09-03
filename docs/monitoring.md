@@ -35,6 +35,8 @@ flowchart TB
         ne --> vmagent
         ksm[kube-state-metrics] --> vmagent
         cadvisor[kubelet / cAdvisor] --> vmagent
+        speedtest[speedtest-exporter] --> vmagent
+        blackbox[blackbox-exporter] --> vmagent
 
         vmalert[VMAlert - rules] --> vmsingle
         vmalert --> vmam[VMAlertmanager]
@@ -51,6 +53,8 @@ flowchart TB
     bridge --> ntfy[ntfy.sh topics]
     gatus --> ntfy
     grafana --> user[You]
+    speedtest --> isp[(Ookla / the WAN)]
+    blackbox --> isp
 ```
 
 Two deploy layers:
@@ -99,6 +103,10 @@ alerts are dropped to a blackhole receiver. Grouping: by `alertname` +
 | `pvc-storage-vmrules.yaml` | PVC capacity + inode alerts |
 | `cadvisor-vmnodescrape.yaml` | per-container metrics from kubelet's cAdvisor |
 | `gatus.yaml` | synthetic uptime probing → ntfy |
+| `speedtest-exporter.yaml` | Ookla speed test every 15m → `speedtest_*` metrics |
+| `blackbox-exporter.yaml` | external HTTP/DNS probes (`VMProbe`) → `probe_*` metrics |
+| `internet-vmrules.yaml` | internet down / degraded alerts |
+| `internet-grafana-dashboard.yaml` | "Internet Connection" dashboard |
 | `victorialogs.yaml` | VictoriaLogs log database (30d, 10 Gi PVC) |
 | `vector.yaml` | Vector DaemonSet shipping pod logs → VictoriaLogs |
 | `victorialogs-datasource.yaml` | Grafana datasource for VictoriaLogs |
@@ -174,6 +182,84 @@ Cluster-wide, from `kubelet_volume_stats_*`.
 
 Standard node/Kubernetes alerts come from the chart's `defaultRules`.
 
+## Internet connection (speedtest + blackbox)
+
+The k8s port of [geerlingguy/internet-pi](https://github.com/geerlingguy/internet-pi),
+from Jeff Geerling's ["Monitor your Internet with a Raspberry
+Pi"](https://www.jeffgeerling.com/blog/2021/monitor-your-internet-raspberry-pi/) —
+minus the Pi. Upstream dedicates a Raspberry Pi to a docker-compose stack with
+its *own* Prometheus and Grafana; here it collapses to two exporters in the
+`monitoring` namespace, scraped by the VMAgent that already exists. (Pi-hole,
+Starlink and Shelly power monitoring from that project are hardware-specific
+and deliberately left out.)
+
+| Piece | What it measures |
+|---|---|
+| **speedtest-exporter** (`ghcr.io/miguelndecarvalho/speedtest-exporter`) | `speedtest_download_bits_per_second`, `_upload_`, `_ping_latency_milliseconds`, `_jitter_`, `speedtest_up`, `speedtest_server_id` |
+| **blackbox-exporter** (`quay.io/prometheus/blackbox-exporter`) | `probe_success`, `probe_duration_seconds`, `probe_http_duration_seconds{phase}` for HTTP + DNS targets |
+
+Two `VMProbe` objects drive blackbox: `internet-http` hits
+`google.com`/`cloudflare.com`/`github.com` every **30s**, and `internet-dns`
+resolves a name against `1.1.1.1`/`8.8.8.8` every **1m**. Three unrelated
+networks so one provider's bad day doesn't read as "internet down", and the
+DNS layer separates "names don't resolve" from "the link is dead".
+
+Grafana dashboard: **Internet Connection** (avocado folder, uid
+`internet-connection`) — throughput, latency/jitter, reachability, the HTTP
+timing breakdown by phase, and availability over the selected range.
+
+### Why it's shaped this way
+
+- **The scrape interval *is* the test schedule.** Every hit on the speedtest
+  exporter's `/metrics` shells out to the Ookla CLI and runs a real test, so
+  its `VMServiceScrape` uses `interval: 15m` with a `60s` timeout (and
+  `SPEEDTEST_TIMEOUT=55` so a hung CLI dies *before* vmagent gives up). Each
+  test moves hundreds of MB — that's ~96 tests/day, so raise the interval on a
+  metered link (and drop `SPEEDTEST_CACHE_FOR` below it, since that's what
+  stops a stray `curl` from kicking off a competing test).
+- **15m samples vs. a 5m lookbehind.** Instant queries return nothing
+  between tests, so every dashboard panel and alert wraps `speedtest_*` in
+  `last_over_time()` / `avg_over_time()`. Preserve that when editing, or rules
+  silently never fire.
+- **No ICMP probing.** blackbox's `icmp` prober needs `CAP_NET_RAW`, which
+  PodSecurity `baseline` (audited in this namespace) flags. HTTP + DNS need no
+  capabilities and isolate the failure anyway — internet-pi's "ping" job is
+  itself an `http_2xx` module.
+- **Gatus doesn't cover this.** Gatus asks "is *my* service up?" against
+  in-cluster Services — those stay green through a total WAN outage. Gatus
+  does probe blackbox-exporter's own `/-/healthy`, because if the prober dies
+  `probe_success` stops existing rather than dropping to 0. speedtest-exporter
+  is intentionally *not* Gatus-probed: an HTTP check on it would trigger a
+  speed test every minute.
+
+### Internet alerts (`internet-vmrules.yaml`)
+
+| Alert | Severity | Fires when |
+|---|---|---|
+| `InternetDown` | critical | **all** external HTTP probes failing for 3m |
+| `InternetDNSDown` | critical | neither public resolver answers for 5m |
+| `InternetTargetUnreachable` | warning | one anchor down 15m while others are up |
+| `InternetHighLatency` | warning | HTTP probe time averages > 2s over 15m |
+| `SpeedtestNotReporting` | warning | no `speedtest_up` sample in 1h (exporter/scrape broken) |
+| `SpeedtestFailing` | warning | every test in the last hour errored |
+| `InternetDownloadSlow` | warning | 6h average download < **50 Mbit/s** |
+| `InternetUploadSlow` | warning | 6h average upload < **20 Mbit/s** |
+| `InternetLatencyHigh` | warning | 6h average idle ping > 100ms |
+
+{: .warning }
+> The two speed thresholds are **placeholders**, not measurements of the actual
+> plan. To retune: edit `InternetDownloadSlow` / `InternetUploadSlow` in
+> `k8s/monitoring/internet-vmrules.yaml` — values are in bits/s (`50e6` =
+> 50 Mbit/s) — then `just mon-deploy`. Roughly **70% of the advertised tier**
+> is a reasonable target: low enough to ignore normal variance, high enough to
+> catch a genuinely degraded link. Both are gated on `speedtest_up`, so a run
+> of failed tests reports as `SpeedtestFailing` rather than "the internet got
+> slow".
+
+When the WAN really is down the ntfy push can't leave the box either;
+Alertmanager retries, so these land as a burst once connectivity returns. The
+value is the timeline, not a live page.
+
 ## Logs (VictoriaLogs + Vector)
 
 `vector.yaml` runs a **Vector DaemonSet** that tails every pod's logs
@@ -193,7 +279,7 @@ group (`ui.default-sort-by: group`):
 
 | Group | Endpoints | "Up" means | ntfy topic |
 |---|---|---|---|
-| `internal` | Grafana / VMSingle / VictoriaLogs `/health`, ESPHome `/`, ntfy `/v1/health`, Pookalam vote `/`, the MCP servers (Kite `/`, Settle Up `/health`), [SigNoz](signoz.md) query `/api/v1/health` + collector `/metrics` | `[STATUS] == 200` | `avocado-alerts` |
+| `internal` | Grafana / VMSingle / VictoriaLogs `/health`, blackbox-exporter `/-/healthy`, ESPHome `/`, ntfy `/v1/health`, Pookalam vote `/`, the MCP servers (Kite `/`, Settle Up `/health`), [SigNoz](signoz.md) query `/api/v1/health` + collector `/metrics` | `[STATUS] == 200` | `avocado-alerts` |
 | `public` | `rithviknishad.dev`, `photos.rithviknishad.dev` (Immich `/api/server/ping`), `kite.rithviknishad.dev` (`/healthz`), `ntfy.rithviknishad.dev` (`/v1/health`), `ohc-pookalam.rithviknishad.dev` (`/`) | 200 + body + TLS-expiry | `avocado-alerts` |
 | `ohcnetwork/care` | CARE public edges (`care-api /ping/`, SPA, gateway `/`, MFE `/health`) + in-cluster (MinIO, middleware, RTSPtoWeb) | 200 (+ TLS-expiry on public) | `avocado-alerts` |
 | `ohcnetwork/teleicu/cameras` | Mock PTZ camera (in-cluster + public edge) and the physical ONVIF cameras (`matrix-cctv`, `prama-cctv`, `cpplus-cctv`) as raw TCP connects to RTSP `:554` | mock: reachable + non-5xx; physical: `[CONNECTED] == true` | `avocado-alerts` |
@@ -263,6 +349,7 @@ just mon-grafana    # http://localhost:3000  (admin / sops password)
 just mon-gatus      # http://localhost:8080
 just mon-logs       # http://localhost:9428  (try /select/vmui)
 just mon-ntfy-test  # send a test push to the topic
+just mon-speedtest  # latest speedtest metrics (runs a test if cache expired)
 ```
 
 ## Access Grafana
@@ -293,5 +380,6 @@ strong. The `README.md` in `k8s/monitoring/` has the full runbook.
 ## Version pinning
 
 Chart and image versions are pinned explicitly (chart `0.78.0`, VictoriaLogs
-`v1.51.0`, Vector `0.50.0-alpine`, Gatus `v5.36.0`, ntfy-alertmanager `1.0.0`).
-Read the relevant CHANGELOG before bumping.
+`v1.51.0`, Vector `0.50.0-alpine`, Gatus `v5.36.0`, ntfy-alertmanager `1.0.0`,
+speedtest-exporter `v3.5.4`, blackbox-exporter `v0.28.0`). Read the relevant
+CHANGELOG before bumping.

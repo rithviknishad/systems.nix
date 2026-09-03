@@ -124,6 +124,13 @@ mon-logs:
 mon-ntfy-logs:
     KUBECONFIG={{kubeconfig_path}} kubectl -n monitoring logs -f deploy/ntfy-alertmanager
 
+# Print the latest speedtest results (runs a real test, ~30s, if cache expired).
+mon-speedtest:
+    # 127.0.0.1, not localhost: busybox wget tries ::1 first and the exporter
+    # binds IPv4 only, which reads as a confusing "connection refused".
+    KUBECONFIG={{kubeconfig_path}} kubectl -n monitoring exec deploy/speedtest-exporter -- \
+        wget -qO- http://127.0.0.1:9798/metrics | grep '^speedtest_'
+
 # Send a test push to an ntfy topic (default: avocado-alerts).
 mon-ntfy-test topic="avocado-alerts":
     curl -H "Title: avocado monitoring test" -H "Tags: white_check_mark" \
