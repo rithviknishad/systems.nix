@@ -90,10 +90,16 @@ flowchart TB
   `start.sh`), because `STATIC_ROOT` is `/app/staticfiles` on the container's
   ephemeral filesystem — nothing persists it between restarts. With
   whitenoise's `CompressedManifestStaticFilesStorage` each start re-hashes and
-  re-compresses (brotli + gzip) ~1300 files. Measured here: **~62s for
-  collectstatic, ~84s from container start to gunicorn listening**. That is
-  what the 70s probe delay is paying for, and it leaves only ~35s of headroom
-  before liveness kills the container at ~120s — see the comment in
+  re-compresses (brotli + gzip) every static file. **This is the stack's most
+  fragile moment.** Measured 2026-09-02 with the prod `cpu: 1` limit and
+  `token_display` enabled: **collectstatic ~103s, container start → gunicorn
+  listening ~114s** — against a liveness kill at 120s. ~6s of headroom.
+  On the rollout that restored `token_display` the first container attempt
+  genuinely lost that race and was killed mid-collectstatic; the retry made
+  it. Enabling a plug that ships static assets directly lengthens this
+  critical path (`token_display` alone: 268 files copied / 1272
+  post-processed, vs 193 / 905 without it). The fix is a `startupProbe`; it's
+  deliberately not applied so prod behaviour reproduces — see the comment in
   `k8s/care/care.yaml`.
 - **TeleICU gateway** authenticates to CARE with JWTs signed by its own
   `JWKS_BASE64` key set; CARE fetches the public half from the gateway's

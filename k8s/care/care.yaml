@@ -64,7 +64,7 @@ data:
   # MUST stay semantically in sync with k8s/care/additional-plugs.json (used
   # at image build time): build installs the pip packages, this makes Django
   # load the plugin apps.
-  ADDITIONAL_PLUGS: '[{"name": "gateway_device", "package_name": "git+https://github.com/10bedicu/care_teleicu_devices.git", "version": "@main"}, {"name": "camera_device", "package_name": "git+https://github.com/10bedicu/care_teleicu_devices.git", "version": "@main"}, {"name": "vitals_observation_device", "package_name": "git+https://github.com/10bedicu/care_teleicu_devices.git", "version": "@main"}]'
+  ADDITIONAL_PLUGS: '[{"name": "gateway_device", "package_name": "git+https://github.com/10bedicu/care_teleicu_devices.git", "version": "@main"}, {"name": "camera_device", "package_name": "git+https://github.com/10bedicu/care_teleicu_devices.git", "version": "@main"}, {"name": "vitals_observation_device", "package_name": "git+https://github.com/10bedicu/care_teleicu_devices.git", "version": "@main"}, {"name": "token_display", "package_name": "git+https://github.com/ohcnetwork/care_token_display.git", "version": "@main"}]'
 ---
 # --- MinIO (S3-compatible object storage) ------------------------------------
 apiVersion: v1
@@ -269,20 +269,24 @@ spec:
           # The 70s delay is NOT arbitrary padding: start.sh runs
           # `collectstatic --noinput` on EVERY start, and with whitenoise's
           # CompressedManifestStaticFilesStorage that means hashing + brotli +
-          # gzip of ~1300 files (~30MB) single-threaded. Measured on this box:
-          # container start -> gunicorn listening = ~84s, of which collectstatic
-          # alone is ~62s. So the first probe at t=70s still fails; it passes on
-          # the 3rd attempt (~t=90s).
+          # gzip of every static file, single-threaded. The token_display plug
+          # alone adds ~75 sound files (268 copied / 1272 post-processed with
+          # it, vs 193 / 905 without).
           #
-          # GOTCHA: liveness with delay 70s + period 10s + 5 failures kills the
-          # container at ~t=120s. That leaves only ~35s of headroom over the
-          # measured startup, and wait_for_db.sh burns into the same budget — a
-          # slow Postgres start pushes total startup past 120s and liveness
-          # kills the pod mid-collectstatic, i.e. CrashLoopBackOff that looks
-          # like an app fault but is really a startup-budget fault. The correct
-          # fix is a startupProbe (as care-celery-beat below already uses), but
-          # these values are deliberately kept identical to prod so the failure
-          # reproduces here.
+          # MEASURED on this box, 2026-09-02, with the cpu:1 limit above and
+          # token_display enabled: collectstatic ~103s, container start ->
+          # gunicorn listening ~114s. Liveness kills the container at
+          # 70 + 5*10 = 120s, so there is ~6s of headroom. That is not a
+          # margin, it is a coin flip: on the rollout that restored
+          # token_display the FIRST container attempt lost the race and was
+          # killed ("Container api failed liveness probe, will be restarted");
+          # the retry came up at 114s. Any contention (a concurrent celery
+          # rollout, a slow wait_for_db.sh) tips it over.
+          #
+          # These values are kept identical to upstream prod on purpose, so the
+          # failure reproduces here rather than being masked. The actual fix is
+          # a startupProbe (as care-celery-beat below already uses), which gates
+          # liveness until startup finishes instead of racing it.
           readinessProbe:
             httpGet: { path: /ping/, port: 9000 }
             initialDelaySeconds: 70
