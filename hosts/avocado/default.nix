@@ -11,6 +11,8 @@
     ../../modules/nh.nix
     ../../modules/sops.nix
     ../../modules/zfs.nix
+    ../../modules/avahi.nix
+    ../../modules/iperf.nix
     ../../modules/kiosk.nix
     ../../modules/home-manager.nix
     ../../modules/tailscale.nix

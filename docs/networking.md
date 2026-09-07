@@ -18,6 +18,8 @@ each module opens only the ports it needs:
 | Port(s) | Opened by | For |
 |---|---|---|
 | 22/tcp | `ssh.nix` (`openFirewall`) | SSH (key-only) |
+| 5201/tcp + 5201/udp | `iperf.nix` | iperf3 server (LAN + tailnet throughput tests) |
+| 5353/udp | `avahi.nix` (`openFirewall`), `esphome.nix` | mDNS — publishing `avocado.local`, ESPHome device discovery |
 | 6443/tcp | `k3s.nix` | Kubernetes API |
 | 2379, 2380/tcp | `k3s.nix` | etcd client / peer (only matters with >1 server) |
 | 10250/tcp | `k3s.nix` | kubelet |
@@ -25,6 +27,26 @@ each module opens only the ports it needs:
 
 Tailscale adds `tailscale0` as a **trusted interface** and sets reverse-path
 filtering to `loose`, so tailnet traffic bypasses these rules.
+
+## mDNS (`avocado.local`)
+
+`modules/avahi.nix` runs an Avahi responder that publishes the host's addresses
+for **`avocado.local`** on the LAN interface (`enp2s0`). This is the only name
+that resolves the box from the LAN — `avocado` is MagicDNS and works inside the
+tailnet only.
+
+```sh
+iperf3 -c avocado.local      # from any Mac/iPhone/Android/Linux box on the LAN
+ssh rithviknishad@avocado.local
+```
+
+{: .warning }
+> **This resolves the host name only.** mDNS has no subdomain delegation, so
+> `grafana.avocado.local` and the other `*.avocado.local` ingress hosts are
+> **not** covered by Avahi — they still need LAN DNS, a MagicDNS search domain,
+> or `/etc/hosts` (see [below](#reaching-internal-services-over-tailscale)).
+> Multicast also does not cross Tailscale, so `.local` works on the LAN only;
+> from the tailnet use `avocado`.
 
 ## Tailscale (private mesh)
 

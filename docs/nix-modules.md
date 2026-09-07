@@ -52,10 +52,14 @@ module file.
 imports = [
   ./hardware.nix ./disko.nix
   ../../modules/base.nix ../../modules/ssh.nix ../../modules/nh.nix
-  ../../modules/sops.nix ../../modules/zfs.nix ../../modules/kiosk.nix
-  ../../modules/home-manager.nix ../../modules/tailscale.nix
-  ../../modules/k3s.nix ../../modules/monitoring.nix
-  ../../modules/cloudflared.nix ../../modules/esphome.nix
+  ../../modules/sops.nix ../../modules/zfs.nix
+  ../../modules/avahi.nix ../../modules/iperf.nix
+  ../../modules/kiosk.nix ../../modules/home-manager.nix
+  ../../modules/tailscale.nix ../../modules/k3s.nix
+  ../../modules/monitoring.nix ../../modules/cloudflared.nix
+  ../../modules/docker.nix ../../modules/esphome.nix
+  ../../modules/bingo.nix ../../modules/zerodha-kite.nix
+  ../../modules/settle-up-mcp.nix
   ../../users/rithviknishad.nix
 ];
 ```
@@ -87,7 +91,7 @@ Each module is small, commented, and does one job. Here's what every one adds.
 - **Automatic GC** weekly, deleting generations older than 30 days;
   `auto-optimise-store` on.
 - Timezone `Asia/Kolkata`, locale `en_US.UTF-8`, `allowUnfree = true`.
-- A small system package set: `git vim curl wget htop tmux rsync`.
+- A small system package set: `git vim curl wget htop tmux rsync nmap`.
 - **Firewall on** (individual ports are opened by the modules that need them).
 
 ### `ssh.nix` — OpenSSH server
@@ -126,6 +130,37 @@ secrets needed early at activation: the user's `hashed-password`
 > ([disko.nix](storage.md)) and no dataset overrides it, so **no automatic
 > snapshots are taken today**. To start snapshotting `/home`, set that property
 > on the `home` dataset. Scrub and trim run regardless.
+
+### `avahi.nix` — mDNS (`avocado.local`)
+
+Runs **Avahi** so the box answers multicast queries for **`avocado.local`** on
+the LAN. Before this, the box had no LAN-resolvable name at all — `avocado` is
+a Tailscale MagicDNS name that only works inside the tailnet, and the LAN has
+no DNS record for it.
+
+- `publish.addresses` — publishes this host's A/AAAA records only (no
+  `workstation`/`userServices` chatter).
+- `allowInterfaces = [ "enp2s0" ]` — LAN only; multicast never crosses
+  Tailscale, and publishing on `cni0`/`flannel.1`/`docker0` would advertise
+  unreachable `10.42.x`/`172.17.x` addresses.
+- `openFirewall` — UDP 5353 (also opened by `esphome.nix` for its own reason;
+  both modules stay self-contained).
+- `nssmdns4` — lets the box resolve *other* `*.local` names too.
+
+{: .note }
+> **Host name only.** mDNS has no notion of subdomains, so this does **not**
+> make the `*.avocado.local` Traefik ingress hosts (`grafana.avocado.local`, …)
+> resolve — those still need LAN DNS or `/etc/hosts`. See
+> [Networking](networking.md#mdns-avocadolocal).
+
+### `iperf.nix` — throughput testing
+
+Installs the `iperf3` CLI and runs an **always-on iperf3 server** (systemd
+unit, `DynamicUser`), so any LAN or tailnet machine can run
+`iperf3 -c avocado.local` without SSH-ing in to start `iperf3 -s` first.
+`openFirewall` opens **TCP 5201**; the module additionally opens **UDP 5201**
+by hand, because the upstream option covers TCP only and `iperf3 -u` carries
+its data over UDP.
 
 ### `kiosk.nix` — stats display (cage + btop)
 

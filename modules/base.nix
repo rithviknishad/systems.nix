@@ -35,6 +35,7 @@
     htop
     tmux
     rsync
+    nmap
   ];
 
   # Firewall on; SSH port opened in modules/ssh.nix.
