@@ -7,8 +7,8 @@
 # else. Every component below therefore gets an explicit ceiling, and
 # ClickHouse additionally gets a query-level memory cap (see `profiles`).
 #
-# Budget (limits): ClickHouse 2Gi + Zookeeper 512Mi + SigNoz 1Gi + collector
-# 1Gi = 4.5Gi worst case; steady-state usage at home-lab ingest volumes is
+# Budget (limits): ClickHouse 2Gi + Zookeeper 1.5Gi + SigNoz 1Gi + collector
+# 1Gi = 5.5Gi worst case; steady-state usage at home-lab ingest volumes is
 # closer to 2-2.5Gi. Keep an eye on `just signoz-status` after any bump.
 #
 # Secret values (ClickHouse password) live in values-secret.yaml.
@@ -52,6 +52,14 @@ clickhouse:
 
   # Zookeeper is ClickHouse's coordination dependency (the chart installs it
   # even for a single replica, because SigNoz's schema uses replicated tables).
+  #
+  # The 1.5Gi limit is NOT arbitrary and should not be trimmed: the chart
+  # hardcodes `ZOO_HEAP_SIZE=1024` (MB) on the StatefulSet and exposes no
+  # values key to lower it, so the JVM always asks for a 1GB heap. Anything
+  # under ~1.4Gi gets the pod OOMKilled in a restart loop a few minutes in
+  # (heap + metaspace/code cache/thread stacks/direct buffers), which is
+  # exactly what happened on the first deploy here. The request stays low
+  # because it idles far below the ceiling.
   zookeeper:
     resources:
       requests:
@@ -59,7 +67,7 @@ clickhouse:
         memory: "256Mi"
       limits:
         cpu: "500m"
-        memory: "512Mi"
+        memory: "1536Mi"
 
 # ===========================================================================
 # SigNoz — query service + web UI
@@ -111,6 +119,43 @@ otelCollector:
     limits:
       cpu: "1000m"
       memory: "1Gi"
+
+  # Publish the collector's OWN telemetry on the pod network, not just
+  # loopback. Recent OpenTelemetry Collector releases default this listener to
+  # `localhost:8888`, so despite the chart declaring a `metrics` container port
+  # and a `signoz.io/scrape` annotation, nothing outside the pod can reach it:
+  # the port is open on the Service and refuses every connection. That silently
+  # breaks vmservicescrape.yaml, so bind it to all interfaces.
+  #
+  # This MUST use the `readers` form. The older
+  # `service.telemetry.metrics.address` key is gone in this collector build and
+  # makes the container exit at startup (verified the hard way — the helm
+  # upgrade failed its progress deadline and auto-rolled-back). Deep-merges
+  # into the chart's service.telemetry block, leaving logs/pipelines/extensions
+  # untouched.
+  config:
+    service:
+      telemetry:
+        metrics:
+          readers:
+            - pull:
+                exporter:
+                  prometheus:
+                    host: 0.0.0.0
+                    port: 8888
+
+  # Expose the health_check extension, which the chart configures on
+  # `0.0.0.0:13133` but never puts on the Service — leaving the collector with
+  # no reachable liveness endpoint. Both the container port and the Service
+  # port are generated from this map, so adding the entry is enough. Gatus
+  # probes it (see k8s/monitoring/gatus.yaml); a purpose-built health endpoint
+  # is a better up/down signal than scraping the metrics page.
+  ports:
+    health-check:
+      enabled: true
+      containerPort: 13133
+      servicePort: 13133
+      protocol: TCP
 
 # ===========================================================================
 # Disabled sub-charts

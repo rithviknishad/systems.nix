@@ -203,12 +203,14 @@ data:
       # SigNoz OTel collector (k8s/signoz) — the INGEST half, probed separately
       # from the query service above because the two fail independently: the UI
       # can be perfectly healthy while every incoming span is being dropped.
-      # There is no service port for the collector's health extension, so this
-      # scrapes its Prometheus telemetry endpoint instead — a 200 there means
-      # the collector process is alive and serving.
+      # Hits the collector's health_check extension on :13133, which the chart
+      # configures but does not put on its Service — k8s/signoz/values.yaml
+      # adds the port back for exactly this reason. (Its :8888 telemetry port
+      # is NOT usable as a probe target by default: recent collector builds
+      # bind that listener to localhost, so the Service port accepts nothing.)
       - name: signoz-otel-collector
         group: internal
-        url: "http://signoz-otel-collector.signoz.svc:8888/metrics"
+        url: "http://signoz-otel-collector.signoz.svc:13133/"
         interval: 1m
         conditions:
           - "[STATUS] == 200"
@@ -607,7 +609,7 @@ spec:
         # v26 was applied to the cluster as "HEAD + cpplus-cctv" only (the ntfy
         # probes below are staged but their service isn't deployed yet), so this
         # file must carry a HIGHER value or a full deploy won't roll the pod.
-        checksum/config: config-v29
+        checksum/config: config-v30
     spec:
       securityContext:
         runAsNonRoot: true

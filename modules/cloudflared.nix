@@ -104,6 +104,27 @@ in
     };
   };
 
+  # Survive transient DNS outages.
+  #
+  # cloudflared resolves argotunnel.com at startup and exits within ~1s if that
+  # fails. With systemd's defaults (RestartSec=100ms plus a start limit of 5
+  # starts per 10s) a tunnel that crash-loops on DNS burns every attempt in ~4
+  # seconds, after which systemd gives up *permanently* — the tunnel then stays
+  # down until a human notices, long after DNS has recovered.
+  #
+  # That is exactly how every public host served Cloudflare Error 1033 for over
+  # an hour on 2026-09-16: a `just deploy` restarted cloudflared during a window
+  # where MagicDNS had no upstream resolvers (a DHCP blip left tailscaled
+  # forwarding to nothing, so every public name SERVFAILed), the unit hit
+  # start-limit-hit, and it never came back on its own.
+  #
+  # Backing off slower and never giving up turns that class of blip into a few
+  # seconds of downtime instead of an outage that needs manual intervention.
+  systemd.services."cloudflared-tunnel-${tunnelId}" = {
+    startLimitIntervalSec = 0; # no start-rate limit: keep retrying forever
+    serviceConfig.RestartSec = 10;
+  };
+
   sops.secrets."cloudflared/credentials" = {
     sopsFile = ../secrets/cloudflared_credentials.json;
     format = "binary";

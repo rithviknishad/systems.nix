@@ -121,6 +121,14 @@ the UI is [tailnet-only](#exposure).
 Add further users from **Settings → Members** (the UI generates invite links
 that work without SMTP).
 
+> Until that first account exists, the collector logs an OpAMP error every 30s
+> (`Server returned an error response`, matched by `cannot create agent without
+> orgId` on the query service). OpAMP is how SigNoz remote-configures the
+> collector, and an agent record has to belong to an organisation — which does
+> not exist until signup. It is noisy but harmless: ingest and querying work
+> regardless, and the errors stop on their own once the admin account is
+> created.
+
 ## Sending telemetry
 
 The collector accepts OTLP and Jaeger formats. From inside the cluster:
@@ -197,17 +205,24 @@ while every incoming span is dropped:
 | Probe | URL | Meaning |
 |---|---|---|
 | `signoz` | `http://signoz.signoz.svc:8080/api/v1/health` | Query service / UI alive |
-| `signoz-otel-collector` | `http://signoz-otel-collector.signoz.svc:8888/metrics` | Ingest pipeline alive |
+| `signoz-otel-collector` | `http://signoz-otel-collector.signoz.svc:13133/` | Ingest pipeline alive |
+
+The collector probe hits its `health_check` extension. That port is absent from
+the chart's Service, so `k8s/signoz/values.yaml` adds it back — a purpose-built
+health endpoint is a better up/down signal than scraping a metrics page.
 
 Both probe in-cluster Services rather than the tailnet host, which is not
 resolvable from cluster DNS. Failures push to the `avocado-alerts` ntfy topic
 like every other endpoint. See [Monitoring](monitoring.md).
 
 `k8s/signoz/vmservicescrape.yaml` additionally hands the collector's Prometheus
-endpoint to VMAgent, so `otelcol_receiver_accepted_spans`,
-`otelcol_exporter_send_failed_spans` and friends are queryable in Grafana. No
-`VMRule` is defined yet — add one once the useful series have been confirmed on
-the live box.
+endpoint (`:8888`) to VMAgent, so `otelcol_receiver_accepted_spans`,
+`otelcol_exporter_send_failed_spans` and friends are queryable in Grafana. That
+listener only reaches the pod network because `values.yaml` overrides it — see
+the comment there before touching it. Confirm the target with
+`up{namespace="signoz"}`. No `VMRule` is defined yet — add one once the useful
+series have been confirmed on the live box (most `otelcol_receiver_*` /
+`otelcol_exporter_*` series only appear once something is actually exporting).
 
 ## Secrets
 
@@ -253,4 +268,6 @@ regenerable, unlike the databases that get `local-path-retain`), but it is why
 | ClickHouse pod restarting | `kubectl -n signoz describe pod chi-signoz-clickhouse-cluster-0-0-0` — check for OOMKilled |
 | "Memory limit exceeded" on a query | Working as designed; narrow the time range, or raise `profiles.default/max_memory_usage` *and* the container limit together |
 | Pod stuck in `Init:0/1` | The `udf` init container's GitHub download (see above) |
+| Zookeeper pod OOMKilled in a loop | Its memory limit was trimmed below ~1.4Gi — see the comment in `k8s/signoz/values.yaml`; the chart hardcodes a 1GB JVM heap |
+| Collector OpAMP errors every 30s | Expected until the [admin account](#first-login) exists |
 | Volume filling up | `just signoz-clickhouse`, then lower the [retention](#retention) |

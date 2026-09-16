@@ -138,8 +138,24 @@ JSON must stay semantically identical between the build arg and the runtime
 ConfigMap (build installs the packages; runtime adds them to
 `INSTALLED_APPS`). The care_fe build needs ~4 GB RAM (Vite).
 
-Upgrading = re-run the image recipe (optionally `just care-images ref=<tag>`)
-and `kubectl -n care rollout restart deploy` for the affected Deployments.
+The backend build is its own recipe, `just care-backend-image <ref>`, which
+`care-images` depends on. `care` and `care_fe` have **independent branches**, so
+a backend feature branch (e.g. `ENG-998`) usually has no counterpart in
+`care_fe` — building both from one ref would fail on the SPA clone.
+
+Upgrading = re-run the image recipe and restart the affected Deployments:
+
+```sh
+just care-backend-image ENG-998    # backend only (branch/tag/ref, default develop)
+just care-images v25.1.0           # backend + SPA from one ref
+kubectl -n care rollout restart deploy/care-backend deploy/care-celery-worker deploy/care-celery-beat
+kubectl -n care rollout restart deploy/care-fe    # only if the SPA was rebuilt
+```
+
+The `:local` tag is shared, so a branch build overwrites whatever ref was built
+last — roll back by rebuilding from `develop` and restarting again. Restart all
+three backend Deployments together: they run the same image, and celery beat is
+the one that applies migrations (see [Architecture](#architecture)).
 
 ## Deploying
 

@@ -200,6 +200,46 @@ Notes:
    `cloudflared tunnel route dns avocado <host>.rithviknishad.dev`.
 3. Add a matching k8s `Ingress` with that `host` (Traefik does the final hop).
 
+### Troubleshooting: Cloudflare Error 1033
+
+`Error 1033` on *every* public host means the edge has no connector registered
+for the tunnel — i.e. `cloudflared` on the box is not running. Check it first:
+
+```sh
+just logs cloudflared-tunnel-41180798-4793-474b-847e-3ad36a30df2f
+```
+
+The usual cause is **DNS, not Cloudflare**. `cloudflared` resolves
+`argotunnel.com` at startup and exits immediately if that fails:
+
+```
+ERR Failed to fetch features ... lookup cfd-features.argotunnel.com on 100.100.100.100:53: no such host
+Couldn't resolve SRV record ... region1.v2.argotunnel.com: no such host
+```
+
+`100.100.100.100` is Tailscale MagicDNS. The box has **no static nameservers** —
+MagicDNS forwards to whatever upstream resolvers DHCP hands out, so if that
+lease blips, `tailscaled` logs `no upstream resolvers set, returning SERVFAIL`
+and every public lookup on the box fails. k3s image pulls from `ghcr.io` failing
+in the same window is a good confirming signal:
+
+```sh
+just logs tailscaled
+```
+
+The unit is configured to retry forever (`RestartSec=10`,
+`startLimitIntervalSec=0` in `modules/cloudflared.nix`), so it should heal
+itself once DNS returns. On an older generation that predates that hardening the
+unit is instead stuck in `failed (Result: start-limit-hit)` and needs a manual
+kick:
+
+```sh
+ssh root@avocado systemctl reset-failed cloudflared-tunnel-41180798-4793-474b-847e-3ad36a30df2f
+ssh root@avocado systemctl start cloudflared-tunnel-41180798-4793-474b-847e-3ad36a30df2f
+```
+
+A healthy tunnel logs `Registered tunnel connection` (usually four of them).
+
 ## Reaching internal services over Tailscale
 
 Because Traefik routes purely by `Host` header, you can hit any ingress without

@@ -419,22 +419,35 @@ bingo-image:
 
 care_build := ".build"
 
-# Build + import the custom core images. care-backend:local bakes the TeleICU
-# plugs in at build time (upstream pip-installs ADDITIONAL_PLUGS in the
-# Dockerfile); care-fe:local compiles the API URL into the bundle (.env.local
-# beats the repo's .env for Vite). Import goes through root ssh (same
-# passwordless path as `just deploy`) because k3s ctr needs root.
-care-images ref="develop":
-    rm -rf {{care_build}}/care {{care_build}}/care_fe
+# Backend image only. Split out of care-images because the two repos have
+# independent branches: a backend feature branch (e.g. ENG-998) usually has no
+# counterpart in care_fe, so building both from one ref would fail on the SPA
+# clone. care-backend:local bakes the plugs in at build time (upstream
+# pip-installs ADDITIONAL_PLUGS in the Dockerfile). The tag is shared, so this
+# overwrites whatever ref was built last — roll back by rebuilding from
+# develop. Restart the three consumers afterwards to pick the new image up:
+#   just care-backend-image ENG-998
+#   kubectl -n care rollout restart deploy/care-backend deploy/care-celery-worker deploy/care-celery-beat
+care-backend-image ref="develop":
+    rm -rf {{care_build}}/care
     mkdir -p {{care_build}}
     git clone --depth 1 --branch {{ref}} https://github.com/ohcnetwork/care {{care_build}}/care
     docker build -t care-backend:local \
         --build-arg ADDITIONAL_PLUGS="$(cat k8s/care/additional-plugs.json)" \
         -f {{care_build}}/care/docker/prod.Dockerfile {{care_build}}/care
+    docker save care-backend:local | ssh {{NIX_SSHOPTS}} {{target}} 'k3s ctr images import -'
+
+# Build + import both custom core images (backend via the recipe above, then
+# the SPA). care-fe:local compiles the API URL into the bundle (.env.local
+# beats the repo's .env for Vite). Import goes through root ssh (same
+# passwordless path as `just deploy`) because k3s ctr needs root.
+care-images ref="develop": (care-backend-image ref)
+    rm -rf {{care_build}}/care_fe
+    mkdir -p {{care_build}}
     git clone --depth 1 --branch {{ref}} https://github.com/ohcnetwork/care_fe {{care_build}}/care_fe
     printf 'REACT_CARE_API_URL=https://care-api.rithviknishad.dev\n' > {{care_build}}/care_fe/.env.local
     docker build -t care-fe:local {{care_build}}/care_fe
-    docker save care-backend:local care-fe:local | ssh {{NIX_SSHOPTS}} {{target}} 'k3s ctr images import -'
+    docker save care-fe:local | ssh {{NIX_SSHOPTS}} {{target}} 'k3s ctr images import -'
 
 # Build + import the TeleICU custom images (devices MFE + mock PTZ camera).
 # The gateway itself uses published ghcr.io/10bedicu images — no build needed.
