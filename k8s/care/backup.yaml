@@ -56,10 +56,13 @@ spec:
                 - -c
                 # -Fc: custom format (compressed, pg_restore-able with
                 # --clean). Prune to 14 daily dumps; care DBs are small.
+                # -maxdepth 1: find recurses and -name matches basenames, so
+                # without it the prune would also eat pinned/care-*.dump
+                # (just care-db-pin), which must live until deleted by hand.
                 - |
                   set -eu
                   pg_dump "$DATABASE_URL" -Fc -f "/backups/care-$(date +%F).dump"
-                  find /backups -name 'care-*.dump' -mtime +14 -delete
+                  find /backups -maxdepth 1 -name 'care-*.dump' -mtime +14 -delete
                   ls -lh /backups
               volumeMounts:
                 - name: backups

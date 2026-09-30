@@ -48,6 +48,15 @@ a wrong domain or storage choice is expensive to undo. Group the questions:
   collect it from the user (examples only: `example.org`, or a subdomain like
   `care.example.org`).
 - **Hostname style** — let the user choose, and explain the tradeoff:
+  - *Single origin, path-routed* (recommended; the care_create reference
+    layout, https://github.com/ohcnetwork/care_create/tree/reference): one
+    host, e.g. `care.example.org`, with `/api/*` to the backend,
+    `/mfe-plugs/<slug>/*` to each MFE plug's static assets, `/<bucket>/*` to
+    object storage (path-style), and `/*` to care_fe. No CORS anywhere, the
+    SPA's CSP `'self'` covers uploads, one cert. Needs an ingress that routes
+    by path **without rewriting** and preserves `Host` (SigV4 presigned URLs
+    sign it). Extra hosts may still be needed for things that want their own
+    origin (e.g. the TeleICU gateway's `CARE_API`).
   - *Flattened, single-label hosts* (e.g. `care.example.org`,
     `care-api.example.org`, `care-s3.example.org`,
     `care-teleicu-gateway.example.org`, `care-teleicu-devices.example.org`).
@@ -71,11 +80,24 @@ a wrong domain or storage choice is expensive to undo. Group the questions:
 - Registry vs local build+load (see Step 2). Where do built images land?
 
 **Object storage** (required — CARE needs S3 for file uploads)
-- In-cluster/self-hosted MinIO, or external S3-compatible (AWS/GCP/R2/B2)? If
-  external, collect endpoint, **external endpoint**, region, bucket names, and
-  credentials.
+- Self-hosted (e.g. **VersityGW**, S3 over a plain POSIX dir, which avocado
+  runs; or MinIO), or external S3-compatible (AWS/GCP/R2/B2)? If external,
+  collect endpoint, **external endpoint**, region, bucket names, and
+  credentials. CARE's `BUCKET_PROVIDER=MINIO` just means "generic path-style
+  S3 at `BUCKET_ENDPOINT`"; use it for any self-hosted gateway.
 - Bucket names (e.g. patient uploads, facility assets, and a TeleICU snapshot
-  bucket if used) and any volume sizes.
+  bucket if used) and any volume sizes. The **facility bucket needs anonymous
+  `s3:GetObject`** (CARE serves covers/profile pictures as unsigned URLs);
+  keep the uploads bucket private.
+
+**Plugs**: which CARE plugs to enable (backend and/or MFE halves). E.g.
+**care-abdm** (ABDM, India): backend `abdm` + an MFE; needs ABDM client
+id/secret, gateway/HSP/ABHA URLs, CM id, a **publicly reachable callback base
+URL** (one bridge URL per client id: registering it takes over from any
+other environment), and care_fe built with `REACT_MFE_REGISTERED_COMPONENTS`
+naming every core component a plug overrides (`AddFacilitySheet` for
+care-abdm). Pin plug refs to a commit and build the FE half from the same
+commit.
 
 **Databases & storage sizes**
 - Postgres for CARE (and a separate one for the TeleICU gateway if used):
@@ -175,7 +197,10 @@ Add uptime/health monitoring for the resolved public endpoints using
 UptimeRobot, a cloud check, …). Good signals:
 - care_fe host → `/` (200)
 - API host → `/ping/` (200, body `{"status": "OK"}`)
-- object-storage public host → `/minio/health/live` (200) if MinIO
+- object storage: its health endpoint, in-cluster (VersityGW
+  `--health /health`, MinIO `/minio/health/live`)
+- each MFE plug: its `remoteEntry.js` (200); a plug's backend health view if
+  it has one (care-abdm: `/api/abdm/health`, no auth)
 - TeleICU gateway host → `/` (200; note its nginx 404s on `/test`)
 - devices MFE host → `/health` (200)
 - physical ONVIF cameras → raw **TCP connect to the RTSP port (554)** (the
@@ -194,15 +219,19 @@ ritual, e.g. bumping a config checksum) rather than inventing a parallel one.
 
 Both are `manage.py` commands run in the CARE backend container.
 
-**Demo / testing** — `load_fixtures` is a dev command with two upstream guards
+**Demo / testing**: `load_fixtures` is a dev command with upstream guards
 to work around:
-1. `faker` isn't in the prod image → install it into the running container
-   first (ephemeral; image stays clean).
-2. It refuses to run unless `settings.DEBUG` → scope `DJANGO_DEBUG=true` to
-   just that one command invocation.
+1. `faker` isn't in the prod image, so install it into the running container
+   first (ephemeral; image stays clean). Pin it to the Pipfile's version.
+2. The guards differ by version; read the command *and* the fixture context
+   first. Older code refuses unless `settings.DEBUG`; newer `load_fixtures`
+   refuses when `settings.IS_PRODUCTION` (false under
+   `config.settings.deployment`); some branches (the fixture-context rework)
+   check **both**. `DJANGO_DEBUG=true` scoped to just that invocation
+   satisfies the DEBUG guard without turning DEBUG on for the serving pods.
 
 ```sh
-<exec-into-backend> -- pip install faker
+<exec-into-backend> -- pip install faker==<Pipfile version>
 <exec-into-backend> -- env DJANGO_DEBUG=true python manage.py load_fixtures
 ```
 
@@ -351,8 +380,43 @@ accounts).
 - **Object storage split endpoints:** CARE hands browsers **presigned URLs**
   built from the *external* endpoint (`BUCKET_EXTERNAL_ENDPOINT`), distinct
   from the internal `BUCKET_ENDPOINT` the backend uses. The external endpoint
-  must be publicly reachable. Mind any edge request-body size caps (e.g. some
-  free CDN tiers cap uploads ~100MB).
+  must be publicly reachable, and whatever proxies it must preserve `Host`.
+  Mind any edge request-body size caps (e.g. some free CDN tiers cap uploads
+  ~100MB).
+- **VersityGW's posix backend stores S3 metadata in `user.*` xattrs**, so the
+  backing filesystem must support them (ZFS `xattr=sa`, ext4/xfs fine; some
+  overlay/NFS setups aren't). Recent aws-cli adds CRC checksums by default;
+  set `AWS_REQUEST_CHECKSUM_CALCULATION=when_required` in bootstrap jobs.
+- **Self-hosted S3 that is SigV4-only (VersityGW, most non-MinIO
+  gateways): don't use `us-east-1`.** CARE builds plain `boto3.client("s3",
+  region_name=BUCKET_REGION, ...)`; for regions that still allow SigV2,
+  botocore presigns with SigV2 and the gateway rejects every browser
+  upload/download (`Please use AWS4-HMAC-SHA256`). Pick a SigV4-only region
+  (e.g. `ap-south-1`) and set the *same* region on the gateway and every
+  client (bootstrap job, TeleICU middleware via `AWS_DEFAULT_REGION`). Verify
+  with a presigned URL: it must carry `X-Amz-Algorithm`, not
+  `AWSAccessKeyId`.
+- **TeleICU device metadata is top-level in the request body.** The
+  `care_teleicu_devices` plugs' `handle_create`/`handle_update` read
+  `request.data` directly; a nested `care_metadata` object is silently
+  ignored and you get a device with empty metadata. Read the device back and
+  check before wiring anything onto it.
+- **Login is rate-limited per IP** (`429 ... Provide Captcha`) — scripts
+  must log in once and reuse the token, not log in per call. Behind
+  Cloudflare, Python's default `urllib` User-Agent gets `error code: 1010`;
+  set an explicit UA.
+- **Everything wired over the API lives in the CARE DB** (plug_configs,
+  devices, users): a DB reset/restore means re-registering MFEs, recreating
+  devices (and the gateway id the TeleICU middleware is configured with),
+  and re-asserting any external registrations (e.g. the ABDM bridge URL).
+  Script these idempotently.
+- **MFE plugs under a path prefix** must be *built* for it (Vite
+  `--base=/mfe-plugs/<slug>/`) and served at that same path, not at
+  `/<slug>/`, which is usually the plug's own SPA route. Serve
+  `remoteEntry.js` with `Cache-Control: no-cache` (stable filename) and
+  `.js`/`.mjs` as `text/javascript`.
+- **ABDM callbacks** arrive server-to-server through your edge: a CDN
+  bot/WAF challenge on `/api/abdm/*` drops them silently.
 - **Migrations run from celery beat**, not the API — preserve that ordering.
 
 ## Validation / definition of done

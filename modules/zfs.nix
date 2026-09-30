@@ -7,7 +7,7 @@ let
   # Datasets holding IRREPLACEABLE state — these get rolling snapshots.
   #
   #   rpool/var  -> /var, which contains /var/lib/rancher/k3s/storage: every
-  #                 k8s PVC on the box (care + teleicu Postgres, MinIO objects,
+  #                 k8s PVC on the box (care + teleicu Postgres, VersityGW objects,
   #                 immich library, monitoring TSDB, ...). This is the dataset
   #                 that matters.
   #   rpool/home -> user data and repo checkouts.

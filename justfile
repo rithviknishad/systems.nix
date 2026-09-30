@@ -404,13 +404,14 @@ bingo-image:
     nix build .#packages.x86_64-linux.bingo-image
 
 # --- CARE (Open Healthcare Network HMIS + TeleICU) ---------------------------
-# Two stacks: k8s/care (MinIO + Postgres + Redis + Django API/celery + SPA)
-# and k8s/care-teleicu (gateway middleware + RTSPtoWeb + devices MFE + mock
-# devices). Public hosts (flattened to one label — Cloudflare Universal SSL
-# only covers *.rithviknishad.dev):
-#   https://care.rithviknishad.dev                   SPA (care_fe)
-#   https://care-api.rithviknishad.dev               Django API
-#   https://care-s3.rithviknishad.dev                MinIO (presigned URLs)
+# Two stacks: k8s/care (VersityGW + Postgres + Redis + Django API/celery + SPA
+# + care-abdm MFE) and k8s/care-teleicu (gateway middleware + RTSPtoWeb +
+# devices MFE + mock devices). Public hosts (flattened to one label —
+# Cloudflare Universal SSL only covers *.rithviknishad.dev):
+#   https://care.rithviknishad.dev                   ONE origin, path-routed:
+#       /api/* -> backend, /mfe-plugs/abdm/* -> ABDM MFE,
+#       /care-uploads/*, /care-facility/* -> VersityGW, /* -> SPA
+#   https://care-api.rithviknishad.dev               Django API (TeleICU, admin)
 #   https://care-teleicu-gateway.rithviknishad.dev   TeleICU gateway
 #   https://care-teleicu-devices.rithviknishad.dev   devices micro-frontend
 #   https://mock-ptz-camera.rithviknishad.dev        mock camera web UI (admin/admin)
@@ -418,36 +419,57 @@ bingo-image:
 # imported straight into k3s's containerd — no registry. See docs/care.md.
 
 care_build := ".build"
+care_origin := "https://care.rithviknishad.dev"
 
 # Backend image only. Split out of care-images because the two repos have
 # independent branches: a backend feature branch (e.g. ENG-998) usually has no
 # counterpart in care_fe, so building both from one ref would fail on the SPA
-# clone. care-backend:local bakes the plugs in at build time (upstream
-# pip-installs ADDITIONAL_PLUGS in the Dockerfile). The tag is shared, so this
-# overwrites whatever ref was built last — roll back by rebuilding from
-# develop. Restart the three consumers afterwards to pick the new image up:
-#   just care-backend-image ENG-998
+# clone. `repo` allows forks. care-backend:local bakes the plugs in at build
+# time (upstream pip-installs ADDITIONAL_PLUGS in the Dockerfile). The tag is
+# shared, so this overwrites whatever ref was built last — roll back by
+# rebuilding from develop. Restart the three consumers afterwards to pick the
+# new image up:
+#   just care-backend-image rithviknishad/bodhi/ENG-737-test-fixtures rithviknishad/care
 #   kubectl -n care rollout restart deploy/care-backend deploy/care-celery-worker deploy/care-celery-beat
-care-backend-image ref="develop":
+care-backend-image ref="develop" repo="ohcnetwork/care":
     rm -rf {{care_build}}/care
     mkdir -p {{care_build}}
-    git clone --depth 1 --branch {{ref}} https://github.com/ohcnetwork/care {{care_build}}/care
+    git clone --depth 1 --branch {{ref}} https://github.com/{{repo}} {{care_build}}/care
     docker build -t care-backend:local \
         --build-arg ADDITIONAL_PLUGS="$(cat k8s/care/additional-plugs.json)" \
         -f {{care_build}}/care/docker/prod.Dockerfile {{care_build}}/care
     docker save care-backend:local | ssh {{NIX_SSHOPTS}} {{target}} 'k3s ctr images import -'
 
-# Build + import both custom core images (backend via the recipe above, then
-# the SPA). care-fe:local compiles the API URL into the bundle (.env.local
-# beats the repo's .env for Vite). Import goes through root ssh (same
-# passwordless path as `just deploy`) because k3s ctr needs root.
-care-images ref="develop": (care-backend-image ref)
+# SPA image only. The API URL is compiled into the bundle (.env.local beats
+# the repo's .env for Vite): it is the app's own origin, since /api is
+# path-routed on it. REACT_MFE_REGISTERED_COMPONENTS names every core
+# component a plug may override — AddFacilitySheet is care-abdm's; a plug
+# overriding an unlisted component silently gets no override. Then:
+#   kubectl -n care rollout restart deploy/care-fe
+care-fe-image ref="develop" repo="ohcnetwork/care_fe":
     rm -rf {{care_build}}/care_fe
     mkdir -p {{care_build}}
-    git clone --depth 1 --branch {{ref}} https://github.com/ohcnetwork/care_fe {{care_build}}/care_fe
-    printf 'REACT_CARE_API_URL=https://care-api.rithviknishad.dev\n' > {{care_build}}/care_fe/.env.local
+    git clone --depth 1 --branch {{ref}} https://github.com/{{repo}} {{care_build}}/care_fe
+    printf 'REACT_CARE_API_URL={{care_origin}}\nREACT_MFE_REGISTERED_COMPONENTS=AddFacilitySheet\n' \
+        > {{care_build}}/care_fe/.env.local
     docker build -t care-fe:local {{care_build}}/care_fe
     docker save care-fe:local | ssh {{NIX_SSHOPTS}} {{target}} 'k3s ctr images import -'
+
+# ABDM plug frontend (module-federation remote), from k8s/care/abdm-fe/. The
+# commit is read from the abdm entry in k8s/care/additional-plugs.json so the
+# FE and BE halves of the plug are always the same revision; bump it there.
+#   kubectl -n care rollout restart deploy/care-abdm-fe
+care-abdm-fe-image:
+    docker build -t care-abdm-fe:local \
+        --build-arg CARE_ABDM_REF="$(python3 -c 'import json; print(next(p for p in json.load(open("k8s/care/additional-plugs.json")) if p["name"] == "abdm")["package_name"].split("@")[1].split("#")[0])')" \
+        k8s/care/abdm-fe
+    docker save care-abdm-fe:local | ssh {{NIX_SSHOPTS}} {{target}} 'k3s ctr images import -'
+
+# Build + import all core images. Both refs default to develop; the repos'
+# branches are independent, so pass each explicitly for feature work. Import
+# goes through root ssh (same passwordless path as `just deploy`) because
+# k3s ctr needs root.
+care-images be_ref="develop" fe_ref="develop" be_repo="ohcnetwork/care" fe_repo="ohcnetwork/care_fe": (care-backend-image be_ref be_repo) (care-fe-image fe_ref fe_repo) care-abdm-fe-image
 
 # Build + import the TeleICU custom images (devices MFE + mock PTZ camera).
 # The gateway itself uses published ghcr.io/10bedicu images — no build needed.
@@ -480,7 +502,7 @@ care-status:
     KUBECONFIG={{kubeconfig_path}} kubectl -n care-teleicu get pods,svc,ingress,pvc,cronjobs
 
 # Tail a care component's logs (care-backend, care-celery-worker,
-# care-celery-beat, care-fe, postgres, redis, minio).
+# care-celery-beat, care-fe, care-abdm-fe, postgres, redis, versitygw).
 care-logs component="care-backend":
     KUBECONFIG={{kubeconfig_path}} kubectl -n care logs -f deploy/{{component}}
 
@@ -495,29 +517,149 @@ care-teleicu-logs component="teleicu-middleware":
 care-manage *args:
     KUBECONFIG={{kubeconfig_path}} kubectl -n care exec -it deploy/care-backend -- python manage.py {{args}}
 
-# Register (or update) the TeleICU devices micro-frontend as a CARE plug via
-# the plug_config API, so the SPA loads its remoteEntry.js on next load. No
-# UI clicks needed. Idempotent (PUT if it already exists, else POST). Needs an
-# admin (is_staff) login — defaults to the load_fixtures admin/admin, so pass
-# real creds on a hardened instance: `just care-register-mfe myadmin 's3cr3t'`.
-care-register-mfe user="admin" pass="admin":
+# Register (or update) a CARE micro-frontend plug via the plug_config API, so
+# the SPA loads its remoteEntry.js on next load. No UI clicks needed.
+# Idempotent (PUT if the slug exists, else POST). `meta` is the plug's JSON
+# meta object (no single quotes). Needs an admin (is_staff) login — defaults
+# to the load_fixtures admin/admin, so pass real creds once that's rotated.
+care-register-plug slug meta user="admin" pass="admin":
     #!/usr/bin/env sh
     set -eu
-    api=https://care-api.rithviknishad.dev
-    mfe=https://care-teleicu-devices.rithviknishad.dev
+    api={{care_origin}}
     token=$(curl -fsS -X POST "$api/api/v1/auth/login/" -H 'Content-Type: application/json' \
         -d '{"username":"{{user}}","password":"{{pass}}"}' \
         | python3 -c "import sys,json; print(json.load(sys.stdin)['access'])")
-    body='{"slug":"teleicu-devices","meta":{"url":"'"$mfe"'/assets/remoteEntry.js","name":"CARE TeleICU Devices","plug":"teleicu-devices"}}'
-    if curl -fsS "$api/api/v1/plug_config/" | grep -q '"teleicu-devices"'; then
-        curl -fsS -X PUT "$api/api/v1/plug_config/teleicu-devices/" -H "Authorization: Bearer $token" \
+    body=$(python3 -c 'import json,sys; print(json.dumps({"slug": sys.argv[1], "meta": json.loads(sys.argv[2])}))' '{{slug}}' '{{meta}}')
+    if curl -fs -o /dev/null "$api/api/v1/plug_config/{{slug}}/" -H "Authorization: Bearer $token"; then
+        curl -fsS -X PUT "$api/api/v1/plug_config/{{slug}}/" -H "Authorization: Bearer $token" \
             -H 'Content-Type: application/json' -d "$body" >/dev/null
-        echo "updated plug_config: teleicu-devices"
+        echo "updated plug_config: {{slug}}"
     else
         curl -fsS -X POST "$api/api/v1/plug_config/" -H "Authorization: Bearer $token" \
             -H 'Content-Type: application/json' -d "$body" >/dev/null
-        echo "created plug_config: teleicu-devices"
+        echo "created plug_config: {{slug}}"
     fi
+
+# The TeleICU devices MFE (served from its own host, k8s/care-teleicu):
+#   just care-register-mfe myadmin 's3cr3t'
+care-register-mfe user="admin" pass="admin": (care-register-plug "teleicu-devices" '{"url":"https://care-teleicu-devices.rithviknishad.dev/assets/remoteEntry.js","name":"CARE TeleICU Devices","plug":"teleicu-devices"}' user pass)
+
+# The care-abdm MFE (same origin, /mfe-plugs/abdm). `name` must be the
+# federation name from the plug's vite.config.ts.
+care-register-abdm user="admin" pass="admin": (care-register-plug "abdm" '{"url":"https://care.rithviknishad.dev/mfe-plugs/abdm/assets/remoteEntry.js","localPath":"/mfe-plugs/abdm","name":"care_abdm_fe","plug":"abdm"}' user pass)
+
+# Load CARE's demo fixtures (default_fixtures.py: facilities, org tree, demo
+# users incl. admin/admin). Faker is a dev-only dependency, so it's pip-
+# installed into the running pod first (ephemeral: gone on the next restart,
+# which is fine). load_fixtures refuses to run when IS_PRODUCTION is set;
+# config.settings.deployment leaves it False. Run on an EMPTY, migrated DB
+# (see care-db-reset), then rotate the admin password. The fixture context
+# also refuses unless settings.DEBUG, so DJANGO_DEBUG is set for this one
+# process only — the serving pods keep DEBUG off.
+care-seed-demo:
+    KUBECONFIG={{kubeconfig_path}} kubectl -n care exec deploy/care-backend -- \
+        sh -c 'pip install -q Faker==38.2.0 && DJANGO_DEBUG=true python manage.py load_fixtures'
+
+# Take an on-demand dump into the backups PVC under pinned/ (the nightly
+# prune only touches the top level, so pinned dumps are kept until deleted by
+# hand). Prints the TOC size + sha256 as a quick integrity check.
+#   just care-db-pin before-upgrade
+care-db-pin tag=("manual-" + datetime("%Y%m%d-%H%M%S")):
+    #!/usr/bin/env sh
+    set -eu
+    k() { KUBECONFIG={{kubeconfig_path}} kubectl -n care "$@"; }
+    job=care-db-pin-$(date +%s)
+    k create -f - <<EOF
+    apiVersion: batch/v1
+    kind: Job
+    metadata: { name: $job }
+    spec:
+      backoffLimit: 0
+      ttlSecondsAfterFinished: 3600
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: pin
+              image: postgres:17-alpine
+              envFrom: [{ secretRef: { name: care-secret } }]
+              command:
+                - sh
+                - -c
+                - |
+                  set -eu
+                  f=/backups/pinned/care-{{tag}}.dump
+                  mkdir -p /backups/pinned
+                  pg_dump "\$DATABASE_URL" -Fc -f "\$f"
+                  echo "TOC entries: \$(pg_restore --list "\$f" | grep -vc '^;')"
+                  sha256sum "\$f"; ls -lh /backups/pinned
+              volumeMounts: [{ name: backups, mountPath: /backups }]
+          volumes:
+            - { name: backups, persistentVolumeClaim: { claimName: care-db-backups } }
+    EOF
+    until [ -n "$(k get job "$job" -o jsonpath='{.status.succeeded}{.status.failed}')" ]; do sleep 2; done
+    k logs "job/$job"
+    [ "$(k get job "$job" -o jsonpath='{.status.succeeded}')" = 1 ]
+
+# DESTRUCTIVE: wipe the care DB to empty (pins a dump first), flush Redis,
+# then bring the backend back so celery-beat re-runs every migration from
+# scratch. Seed afterwards with `just care-seed-demo`. Does NOT touch
+# VersityGW objects (orphaned uploads are harmless) or the TeleICU stack.
+[confirm("Pin a dump, then DROP the care database and flush Redis?")]
+care-db-reset: (care-db-pin ("pre-reset-" + datetime("%Y%m%d-%H%M%S")))
+    #!/usr/bin/env sh
+    set -eu
+    k() { KUBECONFIG={{kubeconfig_path}} kubectl -n care "$@"; }
+    k scale --replicas=0 deploy/care-backend deploy/care-celery-worker deploy/care-celery-beat
+    k wait --for=delete pod -l 'app in (care-backend,care-celery-worker,care-celery-beat)' --timeout=120s || true
+    k exec deploy/postgres -- sh -c 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d postgres \
+        -c "DROP DATABASE IF EXISTS \"$POSTGRES_DB\" WITH (FORCE)" \
+        -c "CREATE DATABASE \"$POSTGRES_DB\" OWNER \"$POSTGRES_USER\""'
+    k exec deploy/redis -- redis-cli FLUSHALL
+    k scale --replicas=1 deploy/care-backend deploy/care-celery-worker deploy/care-celery-beat
+    echo "DB reset; watch migrations with: just care-logs care-celery-beat"
+
+# DESTRUCTIVE: replace the care DB with a dump from the backups PVC (path
+# relative to it, e.g. pinned/care-pre-abdm-reset-2026-09-29.dump or
+# care-2026-09-28.dump). Pins the current state first. Beat migrates forward
+# on start if the dump predates the running code; restoring a dump NEWER than
+# the code (unknown migrations) is not supported — rebuild the matching image.
+[confirm("Pin a dump, then REPLACE the care database with the given dump?")]
+care-db-restore file: (care-db-pin ("pre-restore-" + datetime("%Y%m%d-%H%M%S")))
+    #!/usr/bin/env sh
+    set -eu
+    k() { KUBECONFIG={{kubeconfig_path}} kubectl -n care "$@"; }
+    k scale --replicas=0 deploy/care-backend deploy/care-celery-worker deploy/care-celery-beat
+    k wait --for=delete pod -l 'app in (care-backend,care-celery-worker,care-celery-beat)' --timeout=120s || true
+    k exec deploy/postgres -- sh -c 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d postgres \
+        -c "DROP DATABASE IF EXISTS \"$POSTGRES_DB\" WITH (FORCE)" \
+        -c "CREATE DATABASE \"$POSTGRES_DB\" OWNER \"$POSTGRES_USER\""'
+    job=care-db-restore-$(date +%s)
+    k create -f - <<EOF
+    apiVersion: batch/v1
+    kind: Job
+    metadata: { name: $job }
+    spec:
+      backoffLimit: 0
+      ttlSecondsAfterFinished: 3600
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: restore
+              image: postgres:17-alpine
+              envFrom: [{ secretRef: { name: care-secret } }]
+              command: [sh, -c, 'pg_restore --no-owner --exit-on-error -d "\$DATABASE_URL" "/backups/{{file}}"']
+              volumeMounts: [{ name: backups, mountPath: /backups, readOnly: true }]
+          volumes:
+            - { name: backups, persistentVolumeClaim: { claimName: care-db-backups } }
+    EOF
+    until [ -n "$(k get job "$job" -o jsonpath='{.status.succeeded}{.status.failed}')" ]; do sleep 2; done
+    k logs "job/$job"
+    [ "$(k get job "$job" -o jsonpath='{.status.succeeded}')" = 1 ]
+    k exec deploy/redis -- redis-cli FLUSHALL
+    k scale --replicas=1 deploy/care-backend deploy/care-celery-worker deploy/care-celery-beat
+    echo "restored {{file}}; watch: just care-logs care-celery-beat"
 
 # Register an ONVIF camera's RTSP feed with the in-cluster RTSPtoWeb and print
 # its stream_id — the value to put in the CARE camera device's `stream_id`
@@ -547,6 +689,18 @@ care-resolve-camera ip user pass stream_id profile="0" onvif_port="80":
         python - '{{ip}}' '{{user}}' '{{pass}}' '{{stream_id}}' '{{profile}}' '{{onvif_port}}' \
         < k8s/care-teleicu/scripts/resolve-camera-stream.py
 
+# (Re)create the TeleICU devices (gateway + one camera per persisted RTSPtoWeb
+# stream + the mock HL7 monitor) on a CARE facility — run after every
+# care-db-reset/restore that loses them. Idempotent (PUTs existing devices by
+# registered_name). Camera host/creds come from the sops stream config and
+# are never printed. Prints the new GATEWAY_DEVICE_ID to put in
+# k8s/care-teleicu/care-teleicu.yaml (then care-teleicu-deploy + restart the
+# middleware). Defaults to the load_fixtures admin; pass real creds later:
+#   just care-wire-devices <facility-uuid> myadmin 's3cr3t'
+care-wire-devices facility user="admin" pass="admin":
+    sops --decrypt --output-type json secrets/care-teleicu.enc.yaml | \
+        python3 k8s/care-teleicu/scripts/wire-devices.py '{{facility}}' '{{user}}' '{{pass}}'
+
 # Edit the sops-encrypted care secret (see k8s/care/secret.example.yaml).
 care-secrets:
     sops secrets/care.enc.yaml
@@ -564,7 +718,7 @@ care-teleicu-secrets-rekey:
 # One-time: point the public care hostnames at the tunnel. Needs the
 # cloudflared login cert (cloudflared tunnel login) on this machine.
 care-dns:
-    for h in care care-api care-s3 care-teleicu-gateway care-teleicu-devices mock-ptz-camera; do \
+    for h in care care-api care-teleicu-gateway care-teleicu-devices mock-ptz-camera; do \
         cloudflared tunnel route dns avocado "$h.rithviknishad.dev"; done
 
 # --- Onam Pookalam Vote (rithviknishad/ohc-pookalam) -------------------------

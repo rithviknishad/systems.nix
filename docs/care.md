@@ -8,7 +8,8 @@ nav_order: 13
 
 [CARE](https://github.com/ohcnetwork/care) is Open Healthcare Network's
 hospital management system. avocado runs the full stack — backend, frontend,
-object storage — plus the [10bedicu](https://github.com/10bedicu) TeleICU
+object storage, the [care-abdm](https://github.com/ohcnetwork/care-abdm) plug
+(ABDM sandbox) — plus the [10bedicu](https://github.com/10bedicu) TeleICU
 layer (gateway middleware, device plugs, devices micro-frontend) and mock
 devices to exercise it, across two namespaces: `care` (`k8s/care/`) and
 `care-teleicu` (`k8s/care-teleicu/`).
@@ -21,12 +22,31 @@ subdomains would fail TLS at the edge.
 
 | Hostname | Serves |
 |---|---|
-| `care.rithviknishad.dev` | care_fe SPA |
-| `care-api.rithviknishad.dev` | Django API (gunicorn `:9000`) |
-| `care-s3.rithviknishad.dev` | MinIO — presigned upload/download URLs |
+| `care.rithviknishad.dev` | **the app origin**, path-routed by Traefik (below) |
+| `care-api.rithviknishad.dev` | Django API (gunicorn `:9000`) — kept for the TeleICU gateway's `CARE_API`, the JWKS trust, and Django admin |
 | `care-teleicu-gateway.rithviknishad.dev` | TeleICU gateway (nginx `:8001`) |
 | `care-teleicu-devices.rithviknishad.dev` | devices micro-frontend (module-federation remote) |
 | `mock-ptz-camera.rithviknishad.dev` | mock PTZ camera web UI (`:8080`, `admin`/`admin`) |
+
+### One origin, path-routed
+
+`care.rithviknishad.dev` follows the layout of the
+[care_create reference](https://github.com/ohcnetwork/care_create/tree/reference)
+(which does it with an nginx gateway); here the `care` Ingress does it with
+Traefik path rules, longest prefix first, paths forwarded **unmodified**:
+
+| Path | Service | Why |
+|---|---|---|
+| `/api/*` | `care-backend:9000` | the SPA's API (`REACT_CARE_API_URL` = the origin itself) **and** ABDM callbacks (`/api/abdm/...`) |
+| `/mfe-plugs/abdm/*` | `care-abdm-fe:80` | the ABDM MFE, built with `--base=/mfe-plugs/abdm/` (the plug's own SPA routes are `/abdm/...`, so its files can't live there) |
+| `/care-uploads/*`, `/care-facility/*` | `versitygw:7070` | presigned uploads/downloads and facility cover URLs, path-style (`BUCKET_EXTERNAL_ENDPOINT` = the origin) |
+| `/*` | `care-fe:80` | the SPA (nginx falls back to `index.html`) |
+
+Same origin means no CORS for the SPA, the ABDM plug, or browser uploads, and
+the SPA's CSP `'self'` already covers the buckets. SigV4 signs the `Host`
+header, so presigned URLs work only because Traefik passes the original host
+through to VersityGW. The old `care-s3.rithviknishad.dev` host is gone.
+Adding another MFE plug = one more `/mfe-plugs/<slug>` path rule + image.
 
 The CARE hosts are public by design — CARE brings its own auth. Uploads are
 capped at ~100 MB by Cloudflare's free-plan request-body limit. The mock
@@ -42,12 +62,13 @@ sensitive and only ever serves a synthetic feed.
 flowchart TB
     subgraph care[namespace: care]
         fe[care-fe nginx :80]
+        abdmfe[care-abdm-fe nginx :80]
         api[care-backend gunicorn :9000]
         worker[celery worker]
         beat[celery beat - runs migrations]
         pg1[(postgres 17)]
         rds1[(redis 8)]
-        minio[(MinIO :9000)]
+        s3[(VersityGW :7070)]
     end
     subgraph teleicu[namespace: care-teleicu]
         mw[teleicu-middleware daphne :8090]
@@ -61,12 +82,15 @@ flowchart TB
         rds2[(redis 7.2)]
     end
 
+    fe -.->|browser loads remote| abdmfe
     fe -.->|browser calls| api
-    api --> pg1 & rds1 & minio
+    api --> pg1 & rds1 & s3
     worker & beat --> pg1 & rds1
+    abdm[ABDM sandbox gateway] -->|callbacks /api/abdm| api
+    worker -->|ABDM calls| abdm
     mw -->|Gateway_Bearer JWT| api
     mw --> pg2 & rds2
-    mw -->|snapshots| minio
+    mw -->|snapshots| s3
     cel --> pg2 & rds2
     rp --> mw & rtsp
     rtsp -->|verifyToken| mw
@@ -91,14 +115,14 @@ flowchart TB
   ephemeral filesystem — nothing persists it between restarts. With
   whitenoise's `CompressedManifestStaticFilesStorage` each start re-hashes and
   re-compresses (brotli + gzip) every static file. **This is the stack's most
-  fragile moment.** Measured 2026-09-02 with the prod `cpu: 1` limit and
-  `token_display` enabled: **collectstatic ~103s, container start → gunicorn
-  listening ~114s** — against a liveness kill at 120s. ~6s of headroom.
-  On the rollout that restored `token_display` the first container attempt
-  genuinely lost that race and was killed mid-collectstatic; the retry made
-  it. Enabling a plug that ships static assets directly lengthens this
-  critical path (`token_display` alone: 268 files copied / 1272
-  post-processed, vs 193 / 905 without it). The fix is a `startupProbe`; it's
+  fragile moment.** Measured 2026-09-02 with the prod `cpu: 1` limit and the
+  (since removed) `token_display` plug enabled: **collectstatic ~103s,
+  container start → gunicorn listening ~114s** — against a liveness kill at
+  120s. ~6s of headroom; one rollout's first container attempt genuinely lost
+  that race and was killed mid-collectstatic. Enabling a plug that ships
+  static assets directly lengthens this critical path (`token_display` alone:
+  268 files copied / 1272 post-processed, vs 193 / 905 without it; `abdm`
+  ships none — its UI is the separate MFE). The fix is a `startupProbe`; it's
   deliberately not applied so prod behaviour reproduces — see the comment in
   `k8s/care/care.yaml`.
 - **TeleICU gateway** authenticates to CARE with JWTs signed by its own
@@ -119,37 +143,50 @@ flowchart TB
 
 ## Custom images (built on the box, no registry)
 
-Four images can't be consumed from upstream registries as-is:
+Five images can't be consumed from upstream registries as-is:
 
 | Image | Why custom |
 |---|---|
-| `care-backend:local` | plugins install at **build** time (`ADDITIONAL_PLUGS` → pip in the Dockerfile builder stage) — bakes in [care_teleicu_devices](https://github.com/10bedicu/care_teleicu_devices) and [care_token_display](https://github.com/ohcnetwork/care_token_display) per `k8s/care/additional-plugs.json` |
-| `care-fe:local` | the API URL is compiled into the Vite bundle (`REACT_CARE_API_URL` via `.env.local`) |
+| `care-backend:local` | plugins install at **build** time (`ADDITIONAL_PLUGS` → pip in the Dockerfile builder stage) — bakes in the plugs listed in `k8s/care/additional-plugs.json` (see [Plugs](#plugs)) |
+| `care-fe:local` | the API URL (`REACT_CARE_API_URL` = the app origin) and the plug-overridable components (`REACT_MFE_REGISTERED_COMPONENTS=AddFacilitySheet`, care-abdm's) are compiled into the Vite bundle via `.env.local` |
+| `care-abdm-fe:local` | the ABDM MFE, built from `k8s/care/abdm-fe/` (Dockerfile + nginx.conf adapted from care_create's reference) at the **same commit** the backend pins |
 | `care-teleicu-devices-fe:local` | upstream publishes no image |
 | `mock-ptz-camera:local` | upstream publishes no image |
 
 `just care-images` and `just care-teleicu-images` shallow-clone upstream into
 the gitignored `.build/`, `docker build` (docker exists solely for this — see
 [`docker.nix`](nix-modules.md#dockernix--local-image-builds)), and pipe
-`docker save` into `k3s ctr images import`. Manifests use
-`imagePullPolicy: Never`, so a missed import fails loudly
+`docker save` into `k3s ctr images import`. (`care-abdm-fe-image` needs no
+clone: BuildKit's `ADD <git-url>#<sha>` fetches the pinned commit itself.)
+Manifests use `imagePullPolicy: Never`, so a missed import fails loudly
 (`ErrImageNeverPull`) instead of pulling something else. The `ADDITIONAL_PLUGS`
 JSON must stay semantically identical between the build arg and the runtime
 ConfigMap (build installs the packages; runtime adds them to
 `INSTALLED_APPS`). The care_fe build needs ~4 GB RAM (Vite).
 
-The backend build is its own recipe, `just care-backend-image <ref>`, which
-`care-images` depends on. `care` and `care_fe` have **independent branches**, so
-a backend feature branch (e.g. `ENG-998`) usually has no counterpart in
-`care_fe` — building both from one ref would fail on the SPA clone.
+Each image has its own recipe — `care-backend-image <ref> [repo]`,
+`care-fe-image <ref> [repo]`, `care-abdm-fe-image` — and `care-images` runs
+all three. `care` and `care_fe` have **independent branches** (and may come
+from forks), so each takes its own ref.
+
+Currently deployed (2026-09-29):
+
+| Image | Source |
+|---|---|
+| backend | `rithviknishad/care@rithviknishad/bodhi/ENG-737-test-fixtures` (fork; includes the report-model registration fix) |
+| SPA | `ohcnetwork/care_fe@bodhi/questionnaire-actions` |
+| ABDM MFE | `ohcnetwork/care-abdm@969a278` (from `additional-plugs.json`) |
 
 Upgrading = re-run the image recipe and restart the affected Deployments:
 
 ```sh
-just care-backend-image ENG-998    # backend only (branch/tag/ref, default develop)
-just care-images v25.1.0           # backend + SPA from one ref
+just care-backend-image ENG-998                          # backend (default develop)
+just care-backend-image my-branch rithviknishad/care     # backend from a fork
+just care-fe-image bodhi/questionnaire-actions           # SPA only
+just care-abdm-fe-image                                  # ABDM MFE (sha from additional-plugs.json)
+just care-images <be_ref> <fe_ref> [be_repo] [fe_repo]   # all three
 kubectl -n care rollout restart deploy/care-backend deploy/care-celery-worker deploy/care-celery-beat
-kubectl -n care rollout restart deploy/care-fe    # only if the SPA was rebuilt
+kubectl -n care rollout restart deploy/care-fe deploy/care-abdm-fe   # if rebuilt
 ```
 
 The `:local` tag is shared, so a branch build overwrites whatever ref was built
@@ -160,15 +197,17 @@ the one that applies migrations (see [Architecture](#architecture)).
 ## Deploying
 
 ```sh
-just care-images            # build + import care-backend:local, care-fe:local
+just care-images <be_ref> <fe_ref>   # build + import backend, SPA, ABDM MFE
 just care-teleicu-images    # build + import MFE + mock camera
 just care-secrets           # create secrets/care.enc.yaml   (see k8s/care/secret.example.yaml)
 just care-teleicu-secrets   # create secrets/care-teleicu.enc.yaml
 just care-deploy            # namespace care: manifests + sops secret
 just care-teleicu-deploy    # namespace care-teleicu: manifests + sops secret
-just care-dns               # one-time: route the 5 hostnames to the tunnel
-just care-manage createsuperuser   # first admin account
+just care-dns               # one-time: route the hostnames to the tunnel
+just care-seed-demo         # demo fixtures (admin/admin + demo users) — OR createsuperuser
 just care-register-mfe      # register the TeleICU devices MFE (plug_config API)
+just care-register-abdm     # register the ABDM MFE (plug_config API)
+just care-wire-devices <facility-uuid>   # TeleICU gateway/cameras/vitals devices (then set GATEWAY_DEVICE_ID)
 ```
 
 Secrets follow the Formance pattern: a full k8s `Secret` manifest lives
@@ -192,32 +231,44 @@ sets (care and the gateway each need their **own**).
    `meta.url = https://care-teleicu-devices.rithviknishad.dev/assets/remoteEntry.js`.
    The SPA reads the (public) plug list on load and pulls the remote; the
    MFE's nginx already serves the required CORS headers. Verify with
-   `curl -s https://care-api.rithviknishad.dev/api/v1/plug_config/`.
-2. **Create a facility**, then a **Gateway device** — both drivable over the
-   API with an admin token. The gateway device is a `POST` to
-   `/api/v1/facility/<facility_id>/device/` with `care_type: gateway` and
-   `care_metadata.endpoint_address` set to the gateway host, e.g.:
+   `curl -s https://care.rithviknishad.dev/api/v1/plug_config/`. Both
+   registrations go through the generic `just care-register-plug <slug>
+   '<meta-json>'`.
+2. **Create the TeleICU devices** — one recipe, on any facility (demo:
+   "FACILITY WITH PATIENTS"):
 
    ```sh
-   curl -X POST "https://care-api.rithviknishad.dev/api/v1/facility/<facility_id>/device/" \
-     -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-     -d '{"care_type":"gateway","status":"active","availability_status":"available",
-          "endpoint_address":"care-teleicu-gateway.rithviknishad.dev","insecure":false,
-          "registered_name":"TeleICU Gateway - avocado/linux",
-          "user_friendly_name":"Avocado Gateway"}'
+   just care-wire-devices <facility-uuid>          # admin/admin; pass real creds later
    ```
 
-   The response's `id` (a UUID) is the gateway device ID.
+   It (re)creates the **gateway** device (`endpoint_address` = the gateway's
+   public host), one **ONVIF camera per stream** in the sops
+   `RTSPTOWEB_CONFIG_JSON` (the stream key becomes the device's `stream_id`,
+   host + creds come from its RTSP URL, so the declarative streams below keep
+   working unchanged), and the **mock HL7 monitor** vitals device
+   (`endpoint_address` = one of the mock's `device_id`s, `192.168.1.13`).
+   Idempotent by `registered_name` (existing devices are PUT); secrets are
+   never printed. It prints the gateway device ID. This is what a DB
+   reset/restore needs afterwards — devices live in the CARE DB.
+
+   > **Device metadata goes at the TOP LEVEL of the request body**, not in
+   > `care_metadata`: the device plugs' `handle_create`/`handle_update` read
+   > `request.data` directly and a `care_metadata` object is silently
+   > ignored (you get a device with empty metadata). By hand, e.g.:
+   > `POST /api/v1/facility/<id>/device/` with
+   > `{"care_type":"gateway","status":"active","availability_status":"available","registered_name":"...","endpoint_address":"care-teleicu-gateway.rithviknishad.dev","insecure":false}`.
 3. Put that ID into `GATEWAY_DEVICE_ID` in the `teleicu-env` ConfigMap
    (`k8s/care-teleicu/care-teleicu.yaml`), `just care-teleicu-deploy`, and
    restart the middleware (`kubectl -n care-teleicu rollout restart
    deploy/teleicu-middleware deploy/teleicu-celery`) — this also enables
    automated vitals observations. The middleware then signs JWTs with its
    JWKS and sends this ID as `X-Gateway-Id` on its CARE calls.
-4. **Add a Camera device (ONVIF).** A camera device needs a **`stream_id`** —
+4. **Onboarding a NEW camera (ONVIF)** — the cameras already in the sops
+   stream config are handled by step 2; this is for adding one. A camera
+   device needs a **`stream_id`** —
    a stream registered in RTSPtoWeb — before it's useful, and the gateway
    doesn't derive that for you (its camera API only does PTZ/status; nothing
-   syncs CARE cameras into RTSPtoWeb). So onboarding is two steps:
+   syncs CARE cameras into RTSPtoWeb). So onboarding is:
 
    1. **Register the RTSP feed → get a stream_id.** ONVIF only exposes the
       RTSP URL (vendor-specific — never guess the path), so
@@ -231,14 +282,15 @@ sets (care and the gateway each need their **own**).
       # mock camera: in-cluster address, ONVIF on 8080
       just care-register-camera mock-ptz-camera.care-teleicu.svc.cluster.local admin admin 0 8080
       ```
-   2. **Create the device** — `POST /api/v1/facility/<facility_id>/device/`
-      (admin token) with `care_type: "camera"`, `type: "ONVIF"`, the
-      `gateway` device id, the camera's `endpoint_address`/`username`/
-      `password`, and the `stream_id` from step 1.
-   3. **Persist the stream** so it survives restarts — see
+   2. **Persist the stream** in the sops seed config — see
       [Declarative camera streams](#declarative-camera-streams) below.
+   3. **Create the device**: `just care-wire-devices <facility-uuid>` picks
+      up every persisted stream (or POST it by hand: `care_type: "camera"`,
+      `type: "ONVIF"`, `gateway`, `endpoint_address`/`username`/`password`,
+      `stream_id` — all top-level, see the note in step 2).
 
-   Also add a **Vitals observation device** for the mock HL7 monitor.
+   The **Vitals observation device** for the mock HL7 monitor is also
+   created by `care-wire-devices`.
    WS-Discovery multicast doesn't cross the pod network, so onboarding is
    always by explicit address — which is how CARE does it anyway. (A
    ventilator mock Deployment also exists but is parked at `replicas: 0`: the
@@ -298,41 +350,197 @@ installs the pip packages, the runtime value adds them to `INSTALLED_APPS`):
 | Plug | Source | Purpose |
 |---|---|---|
 | `gateway_device`, `camera_device`, `vitals_observation_device` | [10bedicu/care_teleicu_devices](https://github.com/10bedicu/care_teleicu_devices) | TeleICU gateway/camera/vitals devices (see above) |
-| `token_display` | [ohcnetwork/care_token_display](https://github.com/ohcnetwork/care_token_display) | SSR waiting-room TV queue board at `care-api.rithviknishad.dev/token_display/sub_queues/<uuid1>,<uuid2>,...`, showing current + upcoming tokens per sub-queue |
+| `abdm` | [ohcnetwork/care-abdm](https://github.com/ohcnetwork/care-abdm) `backend/` @ pinned sha | ABDM (India's digital health stack) HIP/HIU/NHPR integration; see [ABDM](#abdm-care-abdm-plug). Its frontend half is the `care-abdm-fe` MFE |
+
+`token_display` ([ohcnetwork/care_token_display](https://github.com/ohcnetwork/care_token_display))
+was dropped on 2026-09-29: it crashed the backend on the ENG-737 branch, and
+its ~75 sound files were the biggest single cost in the collectstatic race
+above.
+
+The abdm entry pins a **commit** (`...care-abdm.git@<sha>#subdirectory=backend`)
+because `care-abdm-fe-image` reads the same sha, which keeps the two halves of
+the plug in lockstep. Bump the plug = edit the sha in **both**
+`additional-plugs.json` and the `ADDITIONAL_PLUGS` ConfigMap value, rebuild the
+backend + ABDM MFE, `just care-deploy`, and roll the Deployments; beat applies
+any new `abdm` migrations.
 
 Upgrading a plug's pinned ref = re-run `just care-images` and roll the
 affected Deployments (see [Custom images](#custom-images-built-on-the-box-no-registry)).
 
-## Object storage (MinIO)
+## ABDM (care-abdm plug)
 
-One MinIO instance (namespace `care`, 50 Gi PVC) with three buckets, created
-idempotently by the `minio-buckets` Job: `care-uploads` (patient files),
-`care-facility` (cover images), `teleicu-gateway` (camera snapshots).
+[care-abdm](https://github.com/ohcnetwork/care-abdm) integrates CARE with
+India's Ayushman Bharat Digital Mission, pointed at the **sandbox**. The
+plug's own `docs/` (roadmap, dev setup, verification, ADRs) is the
+authoritative reference; this section only covers how avocado wires it.
 
-CARE talks to MinIO in-cluster (`BUCKET_ENDPOINT=http://minio:9000`) but
-generates **presigned URLs** against the public
-`BUCKET_EXTERNAL_ENDPOINT=https://care-s3.rithviknishad.dev` — the browser
-uploads/downloads directly against MinIO through the tunnel. Bucket
-credentials reuse the MinIO root user; a dedicated service account would add
-ceremony, not security, on a single-admin box.
+**Config.** Non-secret settings live in the `care-backend-env` ConfigMap (the
+plug reads the `ABDM_` prefix); only the client credentials are in sops
+(`ABDM_CLIENT_ID`/`ABDM_CLIENT_SECRET` in `secrets/care.enc.yaml`):
+
+| Var | Value | Note |
+|---|---|---|
+| `ABDM_GATEWAY_URL` | `https://dev.abdm.gov.in` | no `/api/hiecm` suffix |
+| `ABDM_HSP_URL` | `https://apihspsbx.abdm.gov.in` | HRP service registration + all M4 (NHPR) calls |
+| `ABDM_ABHA_URL` | `https://abhasbx.abdm.gov.in/abha/api` | **no** `/v3` (the plug appends it) |
+| `ABDM_CM_ID` | `sbx` | consent manager id |
+| `ABDM_CALLBACK_BASE_URL` | `https://care.rithviknishad.dev` | bridge URL = this; callbacks land on `/api/abdm/...` |
+| `ABDM_DEVELOPER_MODE` | `true` | sandbox only — see the warning below |
+
+**Everything runs in celery.** Callback handlers, record staging, link
+retries and the M3 chain are celery tasks, and the plug's periodic tasks
+(`retry_share_items` every 5 min, `hiu_housekeeping` every 15 min) register
+with the `care-celery-beat` Deployment. A dead worker shows up as "Celery
+worker: blocker" in the developer readiness page.
+
+### Activation (after a deploy on an empty DB)
+
+1. `just care-register-abdm` — upserts plug_config `abdm` with
+   `meta.url = https://care.rithviknishad.dev/mfe-plugs/abdm/assets/remoteEntry.js`,
+   `name = care_abdm_fe` (the federation name). Reload the SPA; the ABDM
+   screens and the overridden `AddFacilitySheet` appear.
+2. Probes: `GET /api/abdm/health` (no auth, Gatus watches it) and, logged in,
+   `GET /api/abdm/gateway/status` — proves the client id/secret get a gateway
+   session.
+3. **Register the bridge URL.** It is **one per client id**: registering
+   avocado takes the sandbox client `SBXID_035123` over from any other
+   environment (e.g. the laptop `care-abdm-sbx` cloudflared tunnel), which
+   then stops receiving callbacks. Switching back = re-run the command there.
+
+   ```sh
+   just care-manage abdm_register_bridge_url --dry-run   # prints the URL + live bridge state
+   just care-manage abdm_register_bridge_url
+   ```
+
+   A superuser can do the same from `/admin/abdm` in the SPA.
+4. **Per facility:** link its HFR id (or create one with the M4 HFR wizard),
+   then **"Register HRP service"** on the facility's ABDM setup page. The HIP
+   id the registry issues (e.g. `IN1410000232_1`) is stored and sent as
+   `X-HIP-ID`; a call sent with the bare HFR id is accepted (202) but its
+   callback never arrives.
+
+### Roadmap (milestones, as the plug defines them)
+
+| Milestone | What | How to prove it here |
+|---|---|---|
+| Gateway session | client-credentials token | `/api/abdm/gateway/status` |
+| **M1 Create** | ABHA enrolment / login (Aadhaar or mobile OTP) from the patient page | sandbox ABHA created and linked to a CARE patient |
+| **M2 Attach** | HIP: discovery, care-context linking, consent, encrypted data push; Scan & Share | link init → OTP → confirm; a consent GRANTED → health-information pushed. Outside production the user-initiated link OTP is fixed at `123456` |
+| **M3 Retrieve** | HIU: consent requests, receive pushed bundles at `/api/abdm/v3/hiu/health-information/transfer` (named in each request, no registration) | a record fetched from another sandbox facility |
+| **M4 Enrol** | NHPR: HPR login ("My HPR ID" on the profile), HFR facility wizard | facility registered/linked in HFR from CARE |
+
+Where each milestone actually stands is tracked in the plug's
+`docs/03-roadmap.md`.
+
+### Gotchas
+
+- **Callbacks traverse Cloudflare.** ABDM's gateway POSTs to
+  `https://care.rithviknishad.dev/api/abdm/...` through the tunnel. If the
+  bridge shows the right URL but `/api/abdm/callbacks` (superuser) stays
+  empty, check Cloudflare's security events. A bot/WAF challenge on a
+  server-to-server POST fails silently; add a WAF skip rule for
+  `/api/abdm/` if that's what is happening.
+- **Developer mode is on and the demo users are public.** `ABDM_DEVELOPER_MODE=true`
+  opens `/abdm/developer` and `/api/abdm/dev/*` (every exchange and plug
+  table, values redacted) to **any logged-in user**, and the demo fixtures
+  create users with a well-known password on a public host. Fine for a
+  sandbox; turn it off (and rotate/disable demo users) before real data.
+- **Sandbox credentials.** The client secret was shared in a chat to set this
+  up; rotate it in the ABDM sandbox portal when convenient and update it with
+  `just care-secrets` + a restart of the three backend Deployments.
+- The plug **must not** be combined with the legacy `care_abdm` plug: both
+  read `ABDM_*`.
+
+## Object storage (VersityGW)
+
+[VersityGW](https://www.versity.com/products/versitygw/) (`versity/versitygw`,
+pinned) replaced MinIO on 2026-09-29. It's a stateless S3 gateway over a
+plain POSIX directory: each bucket is a directory on the `versitygw-data` PVC
+(50 Gi, **`local-path-retain`**), each object an ordinary file, S3 metadata
+(Content-Type, ETag, ...) in `user.*` xattrs — which works because rpool has
+`xattr=sa`. So objects are inspectable, and back-up-able, with plain file
+tools on the host.
+
+The `versitygw-buckets` Job (aws-cli) idempotently creates three buckets:
+`care-uploads` (patient files, private: presigned URLs only),
+`care-facility` (facility covers + profile pictures, **anonymous
+`s3:GetObject`** bucket policy because CARE hands out plain unsigned URLs for
+these; listing stays denied), and `teleicu-gateway` (camera snapshots, shared
+with `k8s/care-teleicu`).
+
+CARE talks to it in-cluster (`BUCKET_ENDPOINT=http://versitygw:7070`) but
+generates URLs against `BUCKET_EXTERNAL_ENDPOINT=https://care.rithviknishad.dev`,
+whose `/care-uploads` and `/care-facility` paths route to VersityGW (see
+[One origin](#one-origin-path-routed)). `BUCKET_PROVIDER` stays `MINIO`:
+to CARE that just means "generic path-style S3 at `BUCKET_ENDPOINT`".
+
+**Region is `ap-south-1`, not `us-east-1`, on purpose.** For regions that
+still allow legacy SigV2 (us-east-1 does), botocore presigns S3 URLs with
+SigV2 (`AWSAccessKeyId`/`Signature`). MinIO accepted that; VersityGW rejects
+it (`400 ... Please use AWS4-HMAC-SHA256`), which breaks every browser upload
+and download. A SigV4-only region makes botocore emit `X-Amz-*` SigV4 URLs.
+The region must match everywhere, since the gateway checks the credential
+scope: `BUCKET_REGION` (care ConfigMap), `VGW_REGION` (VersityGW),
+`AWS_DEFAULT_REGION` in the bucket Job and in the TeleICU ConfigMap (its
+middleware's boto3 client sets no region).
+
+Credentials: VersityGW's root access key/secret **are** `BUCKET_KEY`/
+`BUCKET_SECRET` from the care secret (via `secretKeyRef`, so the gateway
+sees nothing else), and the TeleICU secret's `S3_ACCESS_KEY_ID`/
+`S3_SECRET_ACCESS_KEY` carry the same pair. A dedicated IAM account would add
+ceremony, not security, on a single-admin box. Validated after the switch
+(CARE's own client config, through Cloudflare): presigned PUT/GET 200 on both
+buckets, anonymous GET 403 on `care-uploads` / 200 on `care-facility`,
+anonymous LIST 403 on both.
 
 ## Backups
 
 Nightly `pg_dump` CronJobs (`care-db-backup` 02:30, `teleicu-db-backup`
 02:45) write compressed custom-format dumps to dedicated PVCs, pruned after
 14 days. This is an **app-level** safety net (bad migration, accidental
-delete) — restore with:
-
-```sh
-kubectl -n care exec -it deploy/postgres -- sh   # then, with the backup PVC contents at hand:
-pg_restore -d "$DATABASE_URL" --clean --if-exists care-<date>.dump
-```
+delete). Uploaded files are **not** in these dumps — they're VersityGW files
+on their own retained PVC (covered by ZFS snapshots only).
 
 Check at any time whether a restorable backup actually exists:
 
 ```sh
 just backups-status   # PVs + reclaim policies, last CronJob success, dumps on disk
 ```
+
+### Pinned dumps, reset, restore
+
+Ad-hoc dumps go to `pinned/` on the same `care-db-backups` PVC. The nightly
+prune only touches the PVC's top level (`find -maxdepth 1`; before
+2026-09-29 it recursed and would have eaten pinned dumps after 14 days), so
+pinned dumps stay until deleted by hand.
+
+```sh
+just care-db-pin before-upgrade        # -> pinned/care-before-upgrade.dump (+ TOC count, sha256)
+just care-db-reset                     # [confirm] pin, DROP+CREATE the DB, FLUSHALL redis,
+                                       # restart backend; beat re-migrates from scratch
+just care-seed-demo                    # then: demo fixtures on the empty DB
+just care-register-abdm && just care-register-mfe      # plug_configs live in the DB too
+just care-manage abdm_register_bridge_url              # re-assert ABDM bridge (idempotent)
+just care-wire-devices <facility-uuid>                 # TeleICU devices; new GATEWAY_DEVICE_ID
+just care-db-restore pinned/care-pre-abdm-reset-2026-09-29.dump   # [confirm] pin, then restore
+```
+
+Both destructive recipes pin the current state first, so each is undoable
+with `care-db-restore`. Restore works for a dump **older** than the running
+code (beat migrates it forward on start). A dump that needs migrations the
+image doesn't have needs the matching image first. The TeleICU DB is
+untouched by either, but CARE-side devices, plug_configs and users go with
+the CARE DB: after a reset re-run the steps above and update
+`GATEWAY_DEVICE_ID` (see [Post-deploy wiring](#post-deploy-wiring-one-time)).
+
+To just *look* at an old dump without touching the live DB, `pg_restore` it
+into a scratch database on the same Postgres (`createdb care_old`, restore
+with `DATABASE_URL`'s db swapped to `care_old`, `dropdb care_old` when done).
+
+| Pinned dump | What |
+|---|---|
+| `pinned/care-pre-abdm-reset-2026-09-29.dump` | the DB before the ABDM/ENG-737 reset (develop-era schema; demo fixtures + users, **no** TeleICU gateway/camera devices — those predate every retained dump). sha256 `ea1aa8c4ad085633b8effc0fb55a41a7008e028d2790bf73938352b45fbf2148`, 1680 TOC entries; test-restored into a scratch DB cleanly |
+| `pinned/care-pre-reset-20260929-141606.dump` | same state, taken automatically by `care-db-reset` (sha256 `e8f4e12d…696bd`) |
 
 ### The backup PVC must outlive its namespace
 
@@ -355,7 +563,7 @@ just backups-protect   # idempotent; patches *-db-backups PVs to Retain
 ```
 
 > **Still not disaster recovery.** The backup PVCs, the databases, and the
-> MinIO objects all live on the same striped, non-redundant rpool
+> VersityGW objects all live on the same striped, non-redundant rpool
 > ([Storage](storage.md)). Retain protects against an *operator mistake*, not
 > against a disk failure — losing either disk still loses all of it.
 >
@@ -371,8 +579,10 @@ just backups-protect   # idempotent; patches *-db-backups PVs to Retain
 Gatus probes everything under the **`ohcnetwork/care-avocado`** group on
 [status.rithviknishad.dev](https://status.rithviknishad.dev): the public
 edges (`care-api /ping/`, the SPA, the gateway root, the MFE's
-`/health`, all with TLS-expiry checks) and the in-cluster components (MinIO
-health, middleware, RTSPtoWeb). Cameras live in their own
+`/health`, all with TLS-expiry checks; `care-abdm` = `/api/abdm/health` on the
+app origin, which also proves the `/api` path route and that the plug loaded;
+`care-abdm-fe` = the ABDM MFE's `remoteEntry.js`) and the in-cluster
+components (VersityGW `/health`, middleware, RTSPtoWeb). Cameras live in their own
 **`ohcnetwork/teleicu/cameras`** subgroup (mock + physical), kept separate so
 camera flakiness doesn't dilute the main rollup. The mock camera is probed
 both in-cluster (liveness) and at its public edge

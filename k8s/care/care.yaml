@@ -1,23 +1,30 @@
 # CARE (Open Healthcare Network HMIS) on k3s.
 #
 # Deploy:   just care-deploy        (manifests + sops secret)
-# Images:   just care-images        (care-backend:local, care-fe:local — built
-#           on the box with docker and imported into k3s; see docs/care.md)
-# Visit:    https://care.rithviknishad.dev (SPA)
-#           https://care-api.rithviknishad.dev (Django API)
+# Images:   just care-backend-image / care-fe-image / care-abdm-fe-image
+#           (built on the box with docker and imported into k3s; see
+#           docs/care.md)
+# Visit:    https://care.rithviknishad.dev (single origin, see the Ingress)
+#           https://care-api.rithviknishad.dev (Django API, kept for TeleICU)
 #
 # Architecture: care_fe (static SPA, nginx) + care backend (Django/gunicorn
 # :9000) + celery worker + celery beat (beat also runs DB migrations on start,
-# mirroring upstream's docker-compose), backed by Postgres 17, Redis and MinIO
-# (S3-compatible object storage for file uploads — presigned URLs are handed
-# to browsers, hence the public care-s3 host).
+# mirroring upstream's docker-compose), backed by Postgres 17, Redis and
+# VersityGW (S3 gateway over a plain POSIX directory, for file uploads).
+#
+# ONE ORIGIN, path-routed by Traefik (the care_create reference layout):
+#   /api/*                          -> care-backend (API + ABDM callbacks)
+#   /mfe-plugs/abdm/*               -> care-abdm-fe (the ABDM plug's MFE)
+#   /care-uploads/*, /care-facility/* -> versitygw (presigned URLs + covers)
+#   /*                              -> care-fe (SPA)
+# Same-origin means no CORS for the SPA, the plug or presigned uploads.
 #
 # The backend image has the TeleICU devices plugs (gateway/camera/vitals) and
-# the care_token_display plug (waiting-room TV queue board,
-# https://github.com/ohcnetwork/care_token_display) baked in at BUILD time
-# (upstream installs ADDITIONAL_PLUGS via pip in the Dockerfile builder
-# stage); the same JSON must be present at RUNTIME (ConfigMap below) so the
-# plugin apps are added to INSTALLED_APPS. See k8s/care/additional-plugs.json.
+# the care-abdm plug (https://github.com/ohcnetwork/care-abdm) baked in at
+# BUILD time (upstream installs ADDITIONAL_PLUGS via pip in the Dockerfile
+# builder stage); the same JSON must be present at RUNTIME (ConfigMap below)
+# so the plugin apps are added to INSTALLED_APPS. See
+# k8s/care/additional-plugs.json.
 ---
 apiVersion: v1
 kind: Namespace
@@ -40,7 +47,9 @@ data:
   DJANGO_ALLOWED_HOSTS: '["*"]'
   # Browser origin of the SPA (the MFE loads inside this origin too).
   CORS_ALLOWED_ORIGINS: '["https://care.rithviknishad.dev", "http://localhost:4000"]'
-  CSRF_TRUSTED_ORIGINS: '["https://care-api.rithviknishad.dev"]'
+  # Both origins reach the API: care.* via the /api path route, care-api.*
+  # directly (TeleICU gateway, Django admin).
+  CSRF_TRUSTED_ORIGINS: '["https://care.rithviknishad.dev", "https://care-api.rithviknishad.dev"]'
   CURRENT_DOMAIN: https://care.rithviknishad.dev
   BACKEND_DOMAIN: https://care-api.rithviknishad.dev
   REDIS_URL: redis://redis:6379/0
@@ -51,28 +60,58 @@ data:
   POSTGRES_PORT: "5432"
   GUNICORN_WORKERS: "2"
   CELERY_WORKER_CONCURRENCY: "2"
-  # Object storage: internal endpoint is the in-cluster MinIO service; the
-  # external endpoint is what presigned URLs (used by browsers for uploads/
-  # downloads) are generated against. NOTE: Cloudflare's free plan caps
-  # request bodies at ~100MB, so uploads beyond that will fail at the edge.
+  # Object storage: internal endpoint is the in-cluster VersityGW service;
+  # the external endpoint is what presigned URLs (used by browsers for
+  # uploads/downloads) and facility cover URLs are generated against — the
+  # app origin itself, whose /care-uploads and /care-facility paths Traefik
+  # routes to VersityGW with the Host header intact (SigV4 signs Host, so
+  # the gateway must see the host the URL was signed for). MINIO just means
+  # "generic path-style S3 at BUCKET_ENDPOINT" to CARE. NOTE: Cloudflare's
+  # free plan caps request bodies at ~100MB, so bigger uploads fail at the
+  # edge.
   BUCKET_PROVIDER: MINIO
-  BUCKET_REGION: us-east-1
-  BUCKET_ENDPOINT: http://minio:9000
-  BUCKET_EXTERNAL_ENDPOINT: https://care-s3.rithviknishad.dev
+  # NOT us-east-1: for regions that still allow legacy SigV2, botocore
+  # presigns S3 URLs with SigV2 (AWSAccessKeyId/Signature), which MinIO took
+  # but VersityGW rejects ("Please use AWS4-HMAC-SHA256"). ap-south-1 is
+  # SigV4-only, so presigned URLs come out SigV4. Must equal the gateway's
+  # VGW_REGION (it checks the credential scope) and every other client's.
+  BUCKET_REGION: ap-south-1
+  BUCKET_ENDPOINT: http://versitygw:7070
+  BUCKET_EXTERNAL_ENDPOINT: https://care.rithviknishad.dev
   FILE_UPLOAD_BUCKET: care-uploads
   FACILITY_S3_BUCKET: care-facility
   # MUST stay semantically in sync with k8s/care/additional-plugs.json (used
   # at image build time): build installs the pip packages, this makes Django
   # load the plugin apps.
-  ADDITIONAL_PLUGS: '[{"name": "gateway_device", "package_name": "git+https://github.com/10bedicu/care_teleicu_devices.git", "version": "@main"}, {"name": "camera_device", "package_name": "git+https://github.com/10bedicu/care_teleicu_devices.git", "version": "@main"}, {"name": "vitals_observation_device", "package_name": "git+https://github.com/10bedicu/care_teleicu_devices.git", "version": "@main"}, {"name": "token_display", "package_name": "git+https://github.com/ohcnetwork/care_token_display.git", "version": "@main"}]'
+  ADDITIONAL_PLUGS: '[{"name": "gateway_device", "package_name": "git+https://github.com/10bedicu/care_teleicu_devices.git", "version": "@main"}, {"name": "camera_device", "package_name": "git+https://github.com/10bedicu/care_teleicu_devices.git", "version": "@main"}, {"name": "vitals_observation_device", "package_name": "git+https://github.com/10bedicu/care_teleicu_devices.git", "version": "@main"}, {"name": "abdm", "package_name": "git+https://github.com/ohcnetwork/care-abdm.git@969a27839c02baeee319de1c07f1f93ef145b959#subdirectory=backend", "version": ""}]'
+  # --- care-abdm plug (ABDM sandbox). Client id/secret are in the sops
+  # secret. URLs need the scheme; ABHA_URL is WITHOUT /v3 (the plug appends
+  # it). The bridge URL ABDM calls back is CALLBACK_BASE_URL + /api/abdm —
+  # ONE per client id, so registering this box's URL takes over from any
+  # other environment (e.g. a laptop tunnel) using SBXID_035123.
+  ABDM_GATEWAY_URL: https://dev.abdm.gov.in
+  ABDM_HSP_URL: https://apihspsbx.abdm.gov.in
+  ABDM_ABHA_URL: https://abhasbx.abdm.gov.in/abha/api
+  ABDM_CM_ID: sbx
+  ABDM_CALLBACK_BASE_URL: https://care.rithviknishad.dev
+  # Sandbox only: opens the /api/abdm/dev explorer to every logged-in user.
+  ABDM_DEVELOPER_MODE: "true"
 ---
-# --- MinIO (S3-compatible object storage) ------------------------------------
+# --- VersityGW (S3 gateway over a POSIX directory) -----------------------------
+# Replaced MinIO (2026-09-29). VersityGW is a stateless S3 front-end: each
+# bucket is a directory under /data and each object a plain file, with S3
+# metadata (Content-Type, ETag, ...) in user.* xattrs, which is why the
+# backing dataset needs xattr support (rpool has xattr=sa). Objects are
+# therefore readable/backup-able with ordinary file tools on the host.
+# local-path-retain: deleting the PVC must not take patient uploads with it
+# (same class as the retained DB dumps).
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: minio-data
+  name: versitygw-data
   namespace: care
 spec:
+  storageClassName: local-path-retain
   accessModes: [ReadWriteOnce]
   resources:
     requests:
@@ -81,54 +120,69 @@ spec:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: minio
+  name: versitygw
   namespace: care
 spec:
   replicas: 1
-  # Recreate: two MinIOs on the same local-path data dir would fight.
+  # Recreate: RWO local-path volume; also avoids two gateways racing on the
+  # same multipart-upload staging dirs.
   strategy: { type: Recreate }
   selector:
-    matchLabels: { app: minio }
+    matchLabels: { app: versitygw }
   template:
     metadata:
-      labels: { app: minio }
+      labels: { app: versitygw }
     spec:
+      enableServiceLinks: false
       containers:
-        - name: minio
-          # Unpinned deliberately: MinIO tags are dated snapshots and stale
-          # pins rot; single-node API-only use is a stable surface.
-          image: quay.io/minio/minio:latest
-          args: [server, /data]
-          envFrom:
-            - secretRef: { name: care-secret }
-          ports: [{ containerPort: 9000 }]
+        - name: versitygw
+          image: versity/versitygw:v1.8.0
+          args: [--port, ":7070", --health, /health, posix, /data]
+          # Root credentials == CARE's BUCKET_KEY/SECRET (one identity for
+          # CARE and the TeleICU gateway). secretKeyRef, not envFrom, so the
+          # gateway doesn't see DB/Django/ABDM secrets.
+          env:
+            - name: ROOT_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef: { name: care-secret, key: BUCKET_KEY }
+            - name: ROOT_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef: { name: care-secret, key: BUCKET_SECRET }
+            # == BUCKET_REGION (see the ConfigMap for why not us-east-1).
+            - { name: VGW_REGION, value: ap-south-1 }
+          ports: [{ containerPort: 7070 }]
           readinessProbe:
-            httpGet: { path: /minio/health/live, port: 9000 }
-            initialDelaySeconds: 5
+            httpGet: { path: /health, port: 7070 }
+            initialDelaySeconds: 2
             periodSeconds: 10
           volumeMounts:
             - name: data
               mountPath: /data
       volumes:
         - name: data
-          persistentVolumeClaim: { claimName: minio-data }
+          persistentVolumeClaim: { claimName: versitygw-data }
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: minio
+  name: versitygw
   namespace: care
 spec:
-  selector: { app: minio }
-  ports: [{ port: 9000 }]
+  selector: { app: versitygw }
+  ports: [{ port: 7070 }]
 ---
-# One-shot bucket bootstrap. Idempotent (--ignore-existing), safe to re-apply.
-# The teleicu-gateway bucket lives here too — MinIO is shared with the
-# k8s/care-teleicu stack.
+# One-shot bucket bootstrap. Idempotent (head-bucket || create-bucket; the
+# policy put is an overwrite), safe to re-apply. Jobs are immutable though:
+# changing this spec means deleting the finished Job first.
+# teleicu-gateway lives here too: the gateway is shared with k8s/care-teleicu.
+# care-facility gets an anonymous-GetObject policy because CARE serves
+# facility covers / profile pictures as plain unsigned URLs
+# (BUCKET_EXTERNAL_ENDPOINT/care-facility/<key>); listing stays denied.
+# care-uploads stays private: only reachable via presigned URLs.
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: minio-buckets
+  name: versitygw-buckets
   namespace: care
 spec:
   backoffLimit: 20
@@ -136,18 +190,40 @@ spec:
     spec:
       restartPolicy: OnFailure
       containers:
-        - name: mc
-          image: quay.io/minio/mc:latest
-          envFrom:
-            - secretRef: { name: care-secret }
+        - name: aws
+          image: amazon/aws-cli:2.37.5
+          env:
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef: { name: care-secret, key: BUCKET_KEY }
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef: { name: care-secret, key: BUCKET_SECRET }
+            - { name: AWS_DEFAULT_REGION, value: ap-south-1 }
+            # aws-cli >= 2.23 adds CRC checksums to every request by default;
+            # only send them when the API requires it (max S3 compatibility).
+            - { name: AWS_REQUEST_CHECKSUM_CALCULATION, value: when_required }
+            - name: FACILITY_POLICY
+              value: >-
+                {"Version": "2012-10-17", "Statement": [{"Effect": "Allow",
+                "Principal": "*", "Action": ["s3:GetObject"],
+                "Resource": ["arn:aws:s3:::care-facility/*"]}]}
           command:
             - sh
             - -c
             - |
-              until mc alias set minio http://minio:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD"; do
-                echo "waiting for minio..."; sleep 3
+              set -e
+              EP=http://versitygw:7070
+              until aws --endpoint-url $EP s3api list-buckets >/dev/null; do
+                echo "waiting for versitygw..."; sleep 3
               done
-              mc mb --ignore-existing minio/care-uploads minio/care-facility minio/teleicu-gateway
+              for b in care-uploads care-facility teleicu-gateway; do
+                aws --endpoint-url $EP s3api head-bucket --bucket $b 2>/dev/null \
+                  || aws --endpoint-url $EP s3api create-bucket --bucket $b
+              done
+              aws --endpoint-url $EP s3api put-bucket-policy \
+                --bucket care-facility --policy "$FACILITY_POLICY"
+              echo buckets ready
 ---
 # --- Postgres -----------------------------------------------------------------
 apiVersion: v1
@@ -269,19 +345,19 @@ spec:
           # The 70s delay is NOT arbitrary padding: start.sh runs
           # `collectstatic --noinput` on EVERY start, and with whitenoise's
           # CompressedManifestStaticFilesStorage that means hashing + brotli +
-          # gzip of every static file, single-threaded. The token_display plug
-          # alone adds ~75 sound files (268 copied / 1272 post-processed with
-          # it, vs 193 / 905 without).
+          # gzip of every static file, single-threaded, so its cost scales
+          # with the static files the plugs ship. (The former token_display
+          # plug alone added ~75 sound files: 268 copied / 1272 post-processed
+          # with it, vs 193 / 905 without. The abdm plug ships none.)
           #
           # MEASURED on this box, 2026-09-02, with the cpu:1 limit above and
           # token_display enabled: collectstatic ~103s, container start ->
           # gunicorn listening ~114s. Liveness kills the container at
-          # 70 + 5*10 = 120s, so there is ~6s of headroom. That is not a
-          # margin, it is a coin flip: on the rollout that restored
-          # token_display the FIRST container attempt lost the race and was
-          # killed ("Container api failed liveness probe, will be restarted");
-          # the retry came up at 114s. Any contention (a concurrent celery
-          # rollout, a slow wait_for_db.sh) tips it over.
+          # 70 + 5*10 = 120s, so there was ~6s of headroom: a coin flip, and
+          # the first attempt of one rollout lost it ("Container api failed
+          # liveness probe, will be restarted"). Without token_display the
+          # margin is wider, but any contention (a concurrent celery rollout,
+          # a slow wait_for_db.sh) still eats into it.
           #
           # These values are kept identical to upstream prod on purpose, so the
           # failure reproduces here rather than being masked. The actual fix is
@@ -401,7 +477,47 @@ spec:
   selector: { app: care-fe }
   ports: [{ port: 80 }]
 ---
-# --- Ingress (Traefik routes by Host; public via the Cloudflare Tunnel) --------
+# --- care-abdm frontend (module-federation remote, nginx) ----------------------
+# Built with vite --base=/mfe-plugs/abdm/ and served under that same path
+# (k8s/care/abdm-fe/), so the Ingress forwards /mfe-plugs/abdm/* unchanged.
+# care_fe learns about it from the "abdm" plug_config row (just
+# care-register-abdm), fetched from the API at runtime.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: care-abdm-fe
+  namespace: care
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: care-abdm-fe }
+  template:
+    metadata:
+      labels: { app: care-abdm-fe }
+    spec:
+      containers:
+        - name: nginx
+          image: care-abdm-fe:local
+          imagePullPolicy: Never
+          ports: [{ containerPort: 80 }]
+          readinessProbe:
+            httpGet: { path: /mfe-plugs/abdm/assets/remoteEntry.js, port: 80 }
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: care-abdm-fe
+  namespace: care
+spec:
+  selector: { app: care-abdm-fe }
+  ports: [{ port: 80 }]
+---
+# --- Ingress (Traefik routes by Host + path; public via the Cloudflare Tunnel) -
+# Traefik orders rules by path length (longest first), so the list order below
+# is for readability only. Paths are forwarded unmodified: the backend serves
+# /api/*, the ABDM MFE is built for /mfe-plugs/abdm/, and VersityGW takes
+# path-style /<bucket>/<key> with the original Host (SigV4 signs it).
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -412,6 +528,32 @@ spec:
     - host: care.rithviknishad.dev
       http:
         paths:
+          # API + ABDM callbacks (/api/abdm/...). Django admin and /static
+          # stay on care-api.* only.
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: care-backend
+                port: { number: 9000 }
+          - path: /mfe-plugs/abdm
+            pathType: Prefix
+            backend:
+              service:
+                name: care-abdm-fe
+                port: { number: 80 }
+          - path: /care-uploads
+            pathType: Prefix
+            backend:
+              service:
+                name: versitygw
+                port: { number: 7070 }
+          - path: /care-facility
+            pathType: Prefix
+            backend:
+              service:
+                name: versitygw
+                port: { number: 7070 }
           - path: /
             pathType: Prefix
             backend:
@@ -427,14 +569,4 @@ spec:
               service:
                 name: care-backend
                 port: { number: 9000 }
-    # Public S3 endpoint — only meaningfully reachable via presigned URLs
-    # (unauthenticated bucket listing is denied by MinIO itself).
-    - host: care-s3.rithviknishad.dev
-      http:
-        paths:
-          - path: /
-            pathType: Prefix
-            backend:
-              service:
-                name: minio
-                port: { number: 9000 }
+

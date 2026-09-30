@@ -282,11 +282,37 @@ data:
         alerts:
           - type: ntfy
 
-      # MinIO — probed in-cluster (the public host only answers presigned
-      # URLs meaningfully; the health endpoint is cleaner via the Service).
-      - name: minio
+      # Same-origin API route (care.* /api -> backend) via the care-abdm
+      # plug's unauthenticated health view: proves the path routing, that the
+      # abdm app loaded (ADDITIONAL_PLUGS at build + runtime), and the route
+      # ABDM callbacks take. It does NOT prove ABDM's gateway is reachable.
+      - name: care-abdm
         group: ohcnetwork/care-avocado
-        url: "http://minio.care.svc:9000/minio/health/live"
+        url: "https://care.rithviknishad.dev/api/abdm/health"
+        interval: 5m
+        conditions:
+          - "[STATUS] == 200"
+          - "[BODY].plug == abdm"
+        alerts:
+          - type: ntfy
+
+      # care-abdm MFE entry through the /mfe-plugs/abdm path route. A 404
+      # here breaks every ABDM screen in the SPA (the plug fails to load).
+      - name: care-abdm-fe
+        group: ohcnetwork/care-avocado
+        url: "https://care.rithviknishad.dev/mfe-plugs/abdm/assets/remoteEntry.js"
+        interval: 5m
+        conditions:
+          - "[STATUS] == 200"
+        alerts:
+          - type: ntfy
+
+      # VersityGW (S3 for uploads + TeleICU snapshots) — probed in-cluster
+      # on its --health endpoint; the public bucket paths only answer
+      # presigned/object URLs meaningfully.
+      - name: versitygw
+        group: ohcnetwork/care-avocado
+        url: "http://versitygw.care.svc:7070/health"
         interval: 1m
         conditions:
           - "[STATUS] == 200"
@@ -609,7 +635,7 @@ spec:
         # v26 was applied to the cluster as "HEAD + cpplus-cctv" only (the ntfy
         # probes below are staged but their service isn't deployed yet), so this
         # file must carry a HIGHER value or a full deploy won't roll the pod.
-        checksum/config: config-v30
+        checksum/config: config-v31
     spec:
       securityContext:
         runAsNonRoot: true

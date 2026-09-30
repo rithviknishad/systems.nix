@@ -108,7 +108,7 @@ Rolling snapshots are **active on `rpool/var` and `rpool/home`**.
 
 `rpool/var` is the one that matters: it contains
 `/var/lib/rancher/k3s/storage`, i.e. every local-path PVC on the box — the
-CARE and TeleICU Postgres volumes, MinIO objects, the Immich library, and the
+CARE and TeleICU Postgres volumes, CARE's VersityGW objects, the Immich library, and the
 metrics/logs TSDBs. A snapshot there is a block-level undo for *all* cluster
 state at once.
 
@@ -196,7 +196,7 @@ recoverable.
 | StorageClass | Reclaim | Use for |
 |---|---|---|
 | `local-path` (default) | `Delete` | ordinary service data — automatic cleanup is what you want |
-| `local-path-retain` | `Retain` | anything not recoverable by redeploying — backup volumes above all |
+| `local-path-retain` | `Retain` | anything not recoverable by redeploying — backup volumes above all, and CARE's uploaded files (`versitygw-data`) |
 
 Under `Retain` the PV is left behind in state `Released` when its PVC goes
 away and the data directory is untouched, so recovery is re-binding or copying

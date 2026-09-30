@@ -35,7 +35,7 @@ you) holds a key that can open them.
 | `secrets/ssh_id_ed25519` | admin + avocado | user's SSH private key (binary) |
 | `secrets/cloudflared_credentials.json` | admin + avocado | tunnel credentials (binary) |
 | `secrets/monitoring.enc.yaml` | admin + avocado | Grafana admin password, ntfy token |
-| `secrets/care.enc.yaml` | admin + avocado | CARE k8s Secret: Django key, JWKS, Postgres + MinIO credentials |
+| `secrets/care.enc.yaml` | admin + avocado | CARE k8s Secret: Django key, JWKS, Postgres, VersityGW root (`BUCKET_KEY`/`BUCKET_SECRET`), ABDM client id/secret |
 | `secrets/care-teleicu.enc.yaml` | admin + avocado | TeleICU gateway k8s Secret: Django key, gateway JWKS, Postgres + S3 credentials |
 | `secrets/kite.enc.yaml` | admin + avocado | Kite k8s Secret: JWT + encrypt keys, GitHub OAuth app id/secret, break-glass password |
 | `secrets/settle-up-mcp.enc.yaml` | admin + avocado | Settle Up MCP k8s Secret: account email + password, live Firebase Web API key, MCP bearer token |

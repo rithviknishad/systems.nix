@@ -42,15 +42,18 @@ data:
   # care SPA's origin).
   CORS_ALLOWED_ORIGINS: https://care.rithviknishad.dev
   REDIS_URL: redis://redis:6379
-  # Snapshots bucket on the shared MinIO in the care namespace (creds in the
-  # secret; bucket created by the minio-buckets Job over there).
-  S3_ENDPOINT_URL: http://minio.care.svc.cluster.local:9000
+  # Snapshots bucket on the shared VersityGW in the care namespace (creds in
+  # the secret; bucket created by the versitygw-buckets Job over there).
+  S3_ENDPOINT_URL: http://versitygw.care.svc.cluster.local:7070
   S3_BUCKET_NAME: teleicu-gateway
+  # The middleware's boto3 client takes no explicit region, so boto falls
+  # back to this. Must match VersityGW's VGW_REGION (k8s/care/care.yaml).
+  AWS_DEFAULT_REGION: ap-south-1
   # The gateway device's CARE id (from POST .../device/, care_type=gateway).
   # Set after registering the device; enables automated vitals observations
   # and is sent as X-Gateway-Id when the middleware calls CARE. Restart the
   # middleware after changing this.
-  GATEWAY_DEVICE_ID: "56fed713-0815-4c38-99fc-ec15c4f09944"
+  GATEWAY_DEVICE_ID: "4811afd7-3f7c-4689-997d-f0e3f92cf826"
 ---
 # --- Postgres -----------------------------------------------------------------
 apiVersion: v1

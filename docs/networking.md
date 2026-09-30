@@ -151,9 +151,8 @@ matched returns `http_status:404`.
 | `ledger.rithviknishad.dev` | Formance `console` | [Formance Ledger](formance.md) |
 | `bingo.rithviknishad.dev` | Bingo `bingo` | [Kubernetes](kubernetes.md) |
 | `kite.rithviknishad.dev` | Kite `kite` | [Kite](kite.md) |
-| `care.rithviknishad.dev` | CARE `care-fe` | [CARE](care.md) |
+| `care.rithviknishad.dev` | CARE app origin, path-routed: `/api` -> `care-backend`, `/mfe-plugs/abdm` -> `care-abdm-fe`, `/care-uploads` + `/care-facility` -> `versitygw`, `/` -> `care-fe` | [CARE](care.md#one-origin-path-routed) |
 | `care-api.rithviknishad.dev` | CARE `care-backend` | [CARE](care.md) |
-| `care-s3.rithviknishad.dev` | CARE `minio` (presigned URLs) | [CARE](care.md) |
 | `care-teleicu-gateway.rithviknishad.dev` | TeleICU `reverse-proxy` | [CARE](care.md) |
 | `care-teleicu-devices.rithviknishad.dev` | TeleICU `teleicu-devices-fe` | [CARE](care.md) |
 | `mock-ptz-camera.rithviknishad.dev` | TeleICU `mock-ptz-camera` (mock UI, `admin`/`admin`) | [CARE](care.md) |

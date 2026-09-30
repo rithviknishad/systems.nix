@@ -54,14 +54,15 @@ in
         # (CARE has its own auth). Hostnames are FLATTENED to one label:
         # Cloudflare's free Universal SSL cert only covers *.rithviknishad.dev,
         # so *.care.rithviknishad.dev would fail TLS at the edge.
-        #   care      -> care_fe SPA        care-api -> Django API
-        #   care-s3   -> MinIO (presigned upload/download URLs; Cloudflare's
-        #                free-plan ~100MB request-body cap limits upload size)
+        #   care      -> ONE origin, path-routed by Traefik: SPA, /api (incl.
+        #                ABDM callbacks), /mfe-plugs/abdm, and the VersityGW
+        #                buckets for presigned URLs (Cloudflare's free-plan
+        #                ~100MB request-body cap limits upload size)
+        #   care-api  -> Django API (TeleICU gateway's CARE_API, Django admin)
         #   care-teleicu-gateway -> gateway nginx (streams + middleware)
         #   care-teleicu-devices -> devices micro-frontend (loaded by the SPA)
         "care.rithviknishad.dev" = "http://localhost:80";
         "care-api.rithviknishad.dev" = "http://localhost:80";
-        "care-s3.rithviknishad.dev" = "http://localhost:80";
         "care-teleicu-gateway.rithviknishad.dev" = "http://localhost:80";
         "care-teleicu-devices.rithviknishad.dev" = "http://localhost:80";
         # Mock PTZ camera web UI (k8s/care-teleicu) — a throwaway ONVIF/RTSP

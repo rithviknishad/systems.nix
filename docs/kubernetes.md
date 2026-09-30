@@ -173,11 +173,12 @@ The image reaches the box through the normal `just deploy` (k3s preloads it via
 ### CARE HMIS + TeleICU — `k8s/care/` + `k8s/care-teleicu/`
 
 [Open Healthcare Network](https://ohc.network) CARE (Django API + React SPA +
-MinIO object storage) plus the 10bedicu TeleICU layer (gateway middleware,
+VersityGW object storage + the care-abdm ABDM plug) plus the 10bedicu TeleICU layer (gateway middleware,
 RTSPtoWeb stream server, devices micro-frontend, mock ONVIF camera + vitals
 devices). Deployed with kustomize + sops secrets (`just care-deploy`,
-`just care-teleicu-deploy`); public at `https://care.rithviknishad.dev` (+ 4
-sibling hosts). Four images are **built on the box with docker**
+`just care-teleicu-deploy`); public at `https://care.rithviknishad.dev` (one
+origin, path-routed by Traefik to the API, the ABDM MFE, the S3 buckets and
+the SPA; + 4 sibling hosts). Five images are **built on the box with docker**
 (`just care-images`, `just care-teleicu-images`) and imported into k3s's
 containerd — upstream either publishes no image or bakes config/plugins in at
 build time. Nightly `pg_dump` CronJobs back up both databases. Documented on
