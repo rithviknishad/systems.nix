@@ -2,7 +2,7 @@
 # zerodha-kite host-side concerns: (1) preload the Nix-built image into k3s,
 # and (2) put Tailscale HTTPS in front of it.
 #
-# (1) Image preload — same no-registry pattern as modules/bingo.nix. The
+# (1) Image preload — no registry involved. The
 # k8s/zerodha-kite workload runs `zerodha-kite:latest` with imagePullPolicy:
 # IfNotPresent and no registry; services.k3s.images links the OCI tarball into
 # k3s's imageDir and the agent imports it into containerd before workloads

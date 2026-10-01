@@ -35,23 +35,6 @@ creation_rules:
           - *admin
           - *avocado
 
-  # ESPHome secrets.yaml (WiFi creds, API keys). Decrypted at deploy time on
-  # the admin machine into a k8s Secret (`just esphome-deploy`); encrypted to
-  # avocado too for consistency / future in-box deploys.
-  - path_regex: secrets/esphome\.enc\.yaml$
-    key_groups:
-      - age:
-          - *admin
-          - *avocado
-
-  # Formance Ledger k8s Secret (DB password, POSTGRES_URI, console COOKIE_SECRET).
-  # A full k8s Secret manifest, decrypted at deploy time on the admin machine
-  # (`just formance-deploy`); encrypted to avocado too for consistency.
-  - path_regex: secrets/formance\.enc\.yaml$
-    key_groups:
-      - age:
-          - *admin
-          - *avocado
 
   # CARE k8s Secrets (Django keys, JWKS, Postgres, S3, ABDM credentials): one
   # for the core stack (k8s/care), one for the TeleICU gateway stack
@@ -79,15 +62,6 @@ creation_rules:
           - *admin
           - *avocado
 
-  # Open Terminology Server k8s Secret (Postgres credentials + the four OTS_*_URL
-  # connection strings + OTS_API_KEY). A full k8s Secret manifest, decrypted at
-  # deploy time on the admin machine (`just ots-deploy`); encrypted to avocado
-  # too for consistency.
-  - path_regex: secrets/ots\.enc\.yaml$
-    key_groups:
-      - age:
-          - *admin
-          - *avocado
 
   # Attic (Nix binary cache) k8s Secret — the base64 HS256 key atticd uses to
   # sign/verify access tokens. A full k8s Secret manifest, decrypted at deploy
@@ -109,44 +83,12 @@ creation_rules:
           - *admin
           - *avocado
 
-  # ntfy (self-hosted notification server) k8s Secret — the declarative auth
-  # model: NTFY_AUTH_USERS (bcrypt hashes), NTFY_AUTH_ACCESS (topic ACLs) and
-  # NTFY_AUTH_TOKENS (bearer tokens). A full k8s Secret manifest, decrypted at
-  # deploy time on the admin machine (`just ntfy-deploy`); encrypted to avocado
-  # too for consistency.
-  - path_regex: secrets/ntfy\.enc\.yaml$
-    key_groups:
-      - age:
-          - *admin
-          - *avocado
-
-  # Onam Pookalam Vote k8s Secret — just GITHUB_TOKEN, a scope-less PAT that
-  # lifts the api.github.com username-lookup rate limit from 60/h to 5000/h.
-  # A full k8s Secret manifest, decrypted at deploy time on the admin machine
-  # (`just ohc-pookalam-deploy`); encrypted to avocado too for consistency.
-  - path_regex: secrets/ohc-pookalam\.enc\.yaml$
-    key_groups:
-      - age:
-          - *admin
-          - *avocado
 
   # Settle Up MCP server k8s Secret (Settle Up account email + password, the
   # live Firebase Web API key, and the MCP bearer token clients must send). A
   # full k8s Secret manifest, decrypted at deploy time on the admin machine
   # (`just settle-up-mcp-deploy`); encrypted to avocado too for consistency.
   - path_regex: secrets/settle-up-mcp\.enc\.yaml$
-    key_groups:
-      - age:
-          - *admin
-          - *avocado
-
-  # SigNoz helm values secret (the ClickHouse password). Unlike most entries
-  # here this is a HELM VALUES fragment, not a k8s Secret manifest: it is
-  # decrypted at deploy time on the admin machine into the gitignored
-  # k8s/signoz/values-secret.yaml and merged over values.yaml by helmfile
-  # (`just signoz-deploy`) — same pattern as monitoring.enc.yaml. Encrypted to
-  # avocado too for consistency / future in-box deploys.
-  - path_regex: secrets/signoz\.enc\.yaml$
     key_groups:
       - age:
           - *admin

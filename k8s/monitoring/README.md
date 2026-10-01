@@ -166,7 +166,7 @@ into four blocks:
 
 | Group | Endpoints | "Up" means | ntfy topic |
 |---|---|---|---|
-| `internal` | Grafana / VMSingle / VictoriaLogs `/health`, blackbox-exporter `/-/healthy`, ESPHome `/`, SigNoz query `/api/v1/health` + collector `health_check` | `[STATUS] == 200` | `avocado-alerts` |
+| `internal` | Grafana / VMSingle / VictoriaLogs `/health`, blackbox-exporter `/-/healthy`, plus each workload's in-cluster Service health route | `[STATUS] == 200` | `avocado-alerts` |
 | `public` | `rithviknishad.dev`, `photos.rithviknishad.dev` (Immich `/api/server/ping`) | 200 + body + TLS-expiry | `avocado-alerts` |
 | `ABDM-SBX` | ABDM **sandbox**: NHPR / ABHA / HIECM | reachable + non-5xx | `avocado-abdm` (prio 4) |
 | `ABDM-LIVE` | ABDM **live**: NHPR / ABHA / HIECM | reachable + non-5xx | `avocado-abdm` (prio 5) |

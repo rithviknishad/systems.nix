@@ -15,7 +15,7 @@
 # Networking: ordinary pod network. The console connects to cameras by the
 # explicit LAN IP typed into the UI, which pods reach via node SNAT (same path
 # the TeleICU middleware uses to reach 192.168.165.x). No hostNetwork/mDNS
-# needed — unlike esphome, discovery is by explicit address.
+# needed — discovery is by explicit address.
 #
 # Live video: go2rtc (WebRTC) is intentionally omitted — WebRTC media needs
 # direct UDP, which the cloudflared tunnel can't carry, so the console falls

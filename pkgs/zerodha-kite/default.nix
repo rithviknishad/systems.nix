@@ -3,7 +3,7 @@
 #
 # This derivation builds the Go binary (`buildGoModule`) and packages it into a
 # slim OCI image (`.image`) that k3s preloads via services.k3s.images (see
-# modules/zerodha-kite.nix) — no registry, same pattern as pkgs/bingo.
+# modules/zerodha-kite.nix) — no registry involved.
 #
 # WHY it is called "zerodha-kite" and not "kite": the repo already runs the Kite
 # *Kubernetes dashboard* (k8s/kite, kite-org/kite). To avoid a name clash across

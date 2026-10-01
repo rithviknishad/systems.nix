@@ -6,7 +6,7 @@
 # API URL compiled into the bundle, ...). Those are built ON the box with
 # `docker build` and imported straight into k3s's containerd via
 # `k3s ctr images import` — no registry involved (same "no registry" idea as
-# the Nix-built bingo image, but for upstream Dockerfiles that are impractical
+# the Nix-built zerodha-kite image, but for upstream Dockerfiles that are impractical
 # to nixify). See the `care-images` recipes in the justfile.
 #
 # Workloads themselves always run under k3s; nothing is `docker run` here.

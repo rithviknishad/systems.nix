@@ -19,10 +19,6 @@ k8s/immich/secret.yaml
 # Kept ignored as a safety net so a stray copy can never be committed.
 k8s/monitoring/values-secret.yaml
 
-# SigNoz helm values holding the real ClickHouse password — decrypted from
-# secrets/signoz.enc.yaml at deploy time by `just signoz-deploy`. Same
-# arrangement as the monitoring values above: transient, never committed.
-k8s/signoz/values-secret.yaml
 
 # Jekyll build artifacts for the docs site (docs/).
 docs/_site/
@@ -30,7 +26,7 @@ docs/.jekyll-cache/
 docs/.jekyll-metadata
 docs/vendor/
 
-# Scratch dir for the image-build recipes (`just care-images`,
-# `just ohc-pookalam-images`, ...) — shallow clones of upstream repos used
+# Scratch dir for the image-build recipes (`just care-images`, ...) —
+# shallow clones of upstream repos used
 # only as docker build contexts. Never source of truth, always recreatable.
 .build/

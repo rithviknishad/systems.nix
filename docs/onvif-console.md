@@ -33,8 +33,8 @@ flowchart TB
   loudly with `ErrImageNeverPull`).
 - **Ordinary pod networking.** The console connects to whatever camera IP you
   type into the UI; pods reach LAN IPs (e.g. `192.168.165.x`) via node SNAT —
-  the same path the TeleICU middleware uses. Unlike [ESPHome](esphome.md) there
-  is no mDNS/discovery requirement, so no `hostNetwork` is needed.
+  the same path the TeleICU middleware uses. There is no mDNS/discovery
+  requirement, so no `hostNetwork` is needed.
 - **Server-side run history.** Every finished run is persisted by the backend
   to a **SQLite** DB (`/app/backend/data/onvif_console.db`, stdlib `sqlite3`),
   keyed per camera — so history is shared across browsers/devices and survives
@@ -47,8 +47,7 @@ flowchart TB
 
 The console has **no authentication of its own and relays the camera
 credentials** you type into it. Its public host is therefore gated by
-**Cloudflare Access**, exactly like [ESPHome](esphome.md) and the
-[Formance Ledger](formance.md) console. The tunnel entry is declared in
+**Cloudflare Access**. The tunnel entry is declared in
 `modules/cloudflared.nix`.
 
 ### Public access setup (one-time, order matters)
@@ -64,7 +63,7 @@ the console (and thus your cameras) wide open:
 
 The standing caveat from the [networking](networking.md) page applies: anyone
 on the LAN can bypass Access by hitting Traefik with a spoofed `Host` header —
-acceptable on a trusted home LAN, same tradeoff as Grafana/ESPHome.
+acceptable on a trusted home LAN, same tradeoff as Grafana.
 
 ## Deploy
 
@@ -115,7 +114,7 @@ Gatus probes the console every minute via the in-cluster Service
 (`http://onvif-console.onvif-console.svc:5800/`, `internal` group in
 `k8s/monitoring/gatus.yaml`) and pushes failures to the `avocado-alerts` ntfy
 topic. The probe deliberately avoids the public URL — Cloudflare Access would
-answer with a login redirect and mask a dead backend (same pattern as ESPHome).
+answer with a login redirect and mask a dead backend.
 
 ## Gotchas
 

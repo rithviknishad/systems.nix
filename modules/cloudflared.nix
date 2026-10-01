@@ -35,21 +35,7 @@ in
         # deliberately NOT exposed here (no auth) — reach them via Tailscale.
         "grafana.rithviknishad.dev" = "http://localhost:80";
         "status.rithviknishad.dev" = "http://localhost:80";
-        # ESPHome dashboard (k8s/esphome) — has NO auth of its own, so this
-        # host must be gated by Cloudflare Access. Create the Access app
-        # BEFORE running `cloudflared tunnel route dns avocado
-        # esphome.rithviknishad.dev`, or the dashboard (which can flash
-        # firmware onto devices) is wide open. See docs/esphome.md.
-        "esphome.rithviknishad.dev" = "http://localhost:80";
-        # Formance Ledger Console (k8s/formance) — micro-stack mode has NO
-        # login of its own, so this host MUST be gated by Cloudflare Access.
-        # Create the Access app BEFORE `cloudflared tunnel route dns avocado
-        # ledger.rithviknishad.dev`. See docs/formance.md.
-        "ledger.rithviknishad.dev" = "http://localhost:80";
-        # Bingo multiplayer game (k8s/bingo) — public by design (party game).
-        # Single-origin: the same host serves the SPA and the boardgame.io
-        # websocket, which Traefik + this tunnel proxy without extra config.
-        "bingo.rithviknishad.dev" = "http://localhost:80";
+
         # CARE HMIS + TeleICU (k8s/care, k8s/care-teleicu) — public by design
         # (CARE has its own auth). Hostnames are FLATTENED to one label:
         # Cloudflare's free Universal SSL cert only covers *.rithviknishad.dev,
@@ -67,8 +53,8 @@ in
         "care-teleicu-devices.rithviknishad.dev" = "http://localhost:80";
         # Mock PTZ camera web UI (k8s/care-teleicu) — a throwaway ONVIF/RTSP
         # simulator with baked-in admin/admin Basic auth. Public by choice for
-        # convenient demos; deliberately NOT Access-gated (unlike the sibling
-        # tools below) because it holds nothing sensitive and only ever serves
+        # convenient demos; deliberately NOT Access-gated (unlike
+        # onvif-console below) because it holds nothing sensitive and only ever serves
         # a synthetic feed. See docs/care.md.
         "mock-ptz-camera.rithviknishad.dev" = "http://localhost:80";
         # ONVIF Camera Testing Console (k8s/onvif-console) — has NO auth of its
@@ -78,29 +64,11 @@ in
         # docs/onvif-console.md.
         "onvif-console.rithviknishad.dev" = "http://localhost:80";
         # Kite Kubernetes dashboard (k8s/kite) — a full cluster-admin console.
-        # Unlike the auth-less tools above, Kite gates itself with GitHub OAuth
+        # Unlike the auth-less onvif-console above, Kite gates itself with GitHub OAuth
         # (only the mapped GitHub user gets in), so this host does NOT need a
         # Cloudflare Access app in front. See docs/kite.md.
         "kite.rithviknishad.dev" = "http://localhost:80";
-        # Open Terminology Server (k8s/ots) — public by design: CARE and other
-        # clients call it server-to-server with a shared x-api-key, which the
-        # app enforces on every path except /health and the Swagger assets. So
-        # NO Cloudflare Access gate here (a browser SSO wall would break the
-        # server-to-server calls). See docs/ots.md.
-        "ots.rithviknishad.dev" = "http://localhost:80";
-        # Onam Pookalam Vote (k8s/ohc-pookalam) — public by design: the whole
-        # point is that anyone in the community can open the link and vote.
-        # The app has its own (trust-based) GitHub username sign-in, so NO
-        # Cloudflare Access gate — an SSO wall would defeat the purpose.
-        # See docs/ohc-pookalam.md.
-        "ohc-pookalam.rithviknishad.dev" = "http://localhost:80";
-        # ntfy (k8s/ntfy) — self-hosted push notifications. Public by design:
-        # phones, browsers and scripts publish/subscribe from anywhere. ntfy
-        # gates everything itself (auth-default-access deny-all + per-user
-        # tokens), so NO Cloudflare Access gate — a browser SSO wall would
-        # break the token-authenticated publishers and the app's long-lived
-        # subscribe streams. See docs/ntfy.md.
-        "ntfy.rithviknishad.dev" = "http://localhost:80";
+
         # suchi document archive (k8s/suchi) — public by design: the Suchi
         # Companion mobile app and API-token clients talk to it from anywhere.
         # suchi gates everything with its own accounts (/metrics is admin-only),

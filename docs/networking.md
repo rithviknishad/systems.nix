@@ -19,7 +19,7 @@ each module opens only the ports it needs:
 |---|---|---|
 | 22/tcp | `ssh.nix` (`openFirewall`) | SSH (key-only) |
 | 5201/tcp + 5201/udp | `iperf.nix` | iperf3 server (LAN + tailnet throughput tests) |
-| 5353/udp | `avahi.nix` (`openFirewall`), `esphome.nix` | mDNS — publishing `avocado.local`, ESPHome device discovery |
+| 5353/udp | `avahi.nix` (`openFirewall`) | mDNS — publishing `avocado.local` |
 | 6443/tcp | `k3s.nix` | Kubernetes API |
 | 2379, 2380/tcp | `k3s.nix` | etcd client / peer (only matters with >1 server) |
 | 10250/tcp | `k3s.nix` | kubelet |
@@ -108,14 +108,8 @@ flowchart LR
             immich[immich-server]
             grafana[grafana]
             gatus[gatus]
-            esphome[esphome]
-            ledger[formance console]
-            bingo[bingo]
             kite[kite]
             care[care + teleicu]
-            ots[ots api]
-            ntfy[ntfy]
-            pookalam[ohc-pookalam]
             suchi[suchi]
         end
     end
@@ -126,14 +120,8 @@ flowchart LR
     traefik -->|photos.rithviknishad.dev| immich
     traefik -->|grafana.rithviknishad.dev| grafana
     traefik -->|status.rithviknishad.dev| gatus
-    traefik -->|esphome.rithviknishad.dev| esphome
-    traefik -->|ledger.rithviknishad.dev| ledger
-    traefik -->|bingo.rithviknishad.dev| bingo
     traefik -->|kite.rithviknishad.dev| kite
     traefik -->|care*.rithviknishad.dev x5| care
-    traefik -->|ots.rithviknishad.dev| ots
-    traefik -->|ntfy.rithviknishad.dev| ntfy
-    traefik -->|ohc-pookalam.rithviknishad.dev| pookalam
     traefik -->|suchi.rithviknishad.dev| suchi
 ```
 
@@ -149,18 +137,12 @@ matched returns `http_status:404`.
 | `photos.rithviknishad.dev` | Immich `immich-server` | [Kubernetes](kubernetes.md) |
 | `grafana.rithviknishad.dev` | `grafana` | [Monitoring](monitoring.md) |
 | `status.rithviknishad.dev` | Gatus `gatus` | [Monitoring](monitoring.md) |
-| `esphome.rithviknishad.dev` | ESPHome `esphome` | [ESPHome](esphome.md) |
-| `ledger.rithviknishad.dev` | Formance `console` | [Formance Ledger](formance.md) |
-| `bingo.rithviknishad.dev` | Bingo `bingo` | [Kubernetes](kubernetes.md) |
 | `kite.rithviknishad.dev` | Kite `kite` | [Kite](kite.md) |
 | `care.rithviknishad.dev` | CARE app origin, path-routed: `/api` -> `care-backend`, `/mfe-plugs/abdm` -> `care-abdm-fe`, `/care-uploads` + `/care-facility` -> `versitygw`, `/` -> `care-fe` | [CARE](care.md#one-origin-path-routed) |
 | `care-api.rithviknishad.dev` | CARE `care-backend` | [CARE](care.md) |
 | `care-teleicu-gateway.rithviknishad.dev` | TeleICU `reverse-proxy` | [CARE](care.md) |
 | `care-teleicu-devices.rithviknishad.dev` | TeleICU `teleicu-devices-fe` | [CARE](care.md) |
 | `mock-ptz-camera.rithviknishad.dev` | TeleICU `mock-ptz-camera` (mock UI, `admin`/`admin`) | [CARE](care.md) |
-| `ots.rithviknishad.dev` | OTS `ots-api` (x-api-key gated) | [Terminology Server](ots.md) |
-| `ntfy.rithviknishad.dev` | ntfy `ntfy` (deny-all + user/token auth) | [ntfy](ntfy.md) |
-| `ohc-pookalam.rithviknishad.dev` | Pookalam vote `ohc-pookalam` | [Onam Pookalam Vote](ohc-pookalam.md) |
 | `suchi.rithviknishad.dev` | suchi `suchi` (own account auth) | [suchi](suchi.md) |
 
 Notes:
@@ -169,28 +151,9 @@ Notes:
 - Grafana can additionally sit behind **Cloudflare Access** (Zero-Trust SSO);
   the JWT wiring is templated and documented on the
   [Monitoring](monitoring.md#grafana-sso-cloudflare-access) page.
-- ESPHome **requires** Cloudflare Access (the dashboard has no auth) — create
-  the Access app *before* the DNS route; see [ESPHome](esphome.md).
-- Formance Ledger **requires** Cloudflare Access (micro-stack mode has no login
-  of its own) — create the Access app *before* the DNS route; see
-  [Formance Ledger](formance.md).
 - Kite carries its **own GitHub OAuth** login (full cluster-admin console), so
-  it is the one public host that does **not** need Cloudflare Access in front;
-  see [Kite](kite.md).
-- The Open Terminology Server gates **every** path with a shared API key
-  (`x-api-key` header) except `/health` and the Swagger assets, and is called
-  server-to-server by CARE, so it also does **not** sit behind Cloudflare
-  Access (a browser SSO wall would break those calls); see
-  [Terminology Server](ots.md).
-- ntfy gates every topic with its own auth (`auth-default-access: deny-all` plus
-  per-user tokens) and is published to by scripts and subscribed to by phones,
-  so it also does **not** sit behind Cloudflare Access. Its subscribe streams
-  are long-lived SSE/WebSocket connections kept alive by a 45 s keepalive; see
-  [ntfy](ntfy.md).
-- The Onam Pookalam vote site is **intentionally wide open** (no Access gate):
-  it is a community vote and carries only its own trust-based GitHub-username
-  sign-in. It holds nothing sensitive beyond the vote tallies; see
-  [Onam Pookalam Vote](ohc-pookalam.md).
+  it does **not** need Cloudflare Access in front despite being
+  cluster-admin; see [Kite](kite.md).
 - suchi gates everything with its **own accounts** (first admin via a one-time
   setup token; `/metrics` admin-only) and is used by the Companion mobile app
   over its API, so it does **not** sit behind Cloudflare Access either. Create

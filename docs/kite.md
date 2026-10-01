@@ -19,7 +19,7 @@ Kite has full control of the cluster. Its ServiceAccount uses a `["*"]`
 ClusterRole. A user who signs in can create, change, and delete every resource.
 For this reason Kite gates itself with GitHub OAuth. Only the mapped GitHub user
 gets in. The public host therefore does not need a Cloudflare Access gate in
-front, unlike the auth-less tools (`esphome`, `ledger`, `onvif-console`).
+front, unlike auth-less tools such as `onvif-console`.
 
 ## Architecture
 

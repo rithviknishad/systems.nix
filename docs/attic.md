@@ -64,7 +64,7 @@ MagicDNS search domain, or `/etc/hosts`), the same as the other
 ## Image
 
 Uses the upstream image `ghcr.io/zhaofengli/attic` directly — no build-on-box
-step (unlike CARE/OTS). Tags are commit hashes; the manifest pins the `toml-1.x`
+step (unlike CARE). Tags are commit hashes; the manifest pins the `toml-1.x`
 tag (`9eda345…`). Bump the `image:` in `k8s/attic/attic.yaml` to update.
 
 ## Deploying

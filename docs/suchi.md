@@ -79,7 +79,7 @@ configuration → Filing tree** (the only required setup step).
 
 There is deliberately **no Cloudflare Access** in front: the Companion mobile
 app and API-token clients call the API directly, and an SSO wall would break
-them (same reasoning as [ntfy](ntfy.md)). suchi's own auth gates everything;
+them — a browser-only login redirect is useless to a native client. suchi's own auth gates everything;
 `/metrics` is admin-only in-app. `/healthz` and `/readyz` are public by design.
 OIDC can be added later (`OIDC_*` env + a sops secret for the client secret).
 
@@ -104,7 +104,7 @@ All config is env in `k8s/suchi/suchi.yaml`; see
 - **Client IPs:** Traefik isn't yet configured to trust cloudflared's
   `X-Forwarded-For` (no `forwardedHeaders.trustedIPs`), so suchi may see every
   client as the same address. Effect: the login rate limit acts as one shared
-  bucket. Fixing it is a cluster-wide Traefik change (it would also fix ntfy).
+  bucket. Fixing it is a cluster-wide Traefik change.
 - **Mail intake** (IMAP) is configured in the UI, not here; credentials are
   sealed into SQLite with `.decrypt-key`. Polling adds visible egress
   (`just suchi-doctor` lists it).

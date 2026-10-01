@@ -13,9 +13,7 @@
   services.avahi = {
     enable = true;
 
-    # Opens UDP 5353. esphome.nix also opens it (so mDNS replies from ESP
-    # devices reach that pod); both stay self-contained rather than one
-    # module depending on the other's rule.
+    # Opens UDP 5353 for mDNS.
     openFirewall = true;
 
     # Publish this host's own A/AAAA records, nothing more. `workstation` and

@@ -25,14 +25,6 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
-    # Third-party app deployed on the cluster (bingo.rithviknishad.dev). Pinned
-    # source only (flake = false); built by pkgs/bingo. Bump: `just update
-    # bingo-app`, then recompute npmDepsHash in pkgs/bingo/default.nix.
-    bingo-app = {
-      url = "github:sonzsara/bingo-app";
-      flake = false;
-    };
-
     # Zerodha Kite MCP server — a Go MCP server for the Kite Connect trading
     # API, deployed on the cluster at avocado:<nodeport> (tailnet only). Pinned
     # source only (flake = false); built by pkgs/zerodha-kite. Bump: `just
@@ -84,30 +76,24 @@
       };
 
       # Buildable packages. `*-image` are the OCI tarballs k3s preloads (see
-      # modules/bingo.nix, modules/zerodha-kite.nix); `*-app` are the built
+      # modules/zerodha-kite.nix); `*-app` are the built
       # apps on their own.
       packages = forAllSystems (
         system:
         let
           pkgs = nixpkgs.legacyPackages.${system};
-          bingo = pkgs.callPackage ./pkgs/bingo {
-            src = inputs.bingo-app;
-            version = inputs.bingo-app.shortRev or "dev";
-            # vite 8 needs a recent Node; pin it rather than track the default.
-            nodejs = pkgs.nodejs_22;
-          };
+
           zerodha-kite = pkgs.callPackage ./pkgs/zerodha-kite {
             src = inputs.kite-mcp-server;
             version = inputs.kite-mcp-server.shortRev or "dev";
           };
         in
         {
-          bingo-app = bingo.app;
           zerodha-kite-app = zerodha-kite.app;
         }
         // nixpkgs.lib.optionalAttrs pkgs.stdenv.isLinux {
           # dockerTools images build on Linux only.
-          bingo-image = bingo.image;
+
           zerodha-kite-image = zerodha-kite.image;
         }
       );

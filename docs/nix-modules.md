@@ -57,8 +57,7 @@ imports = [
   ../../modules/kiosk.nix ../../modules/home-manager.nix
   ../../modules/tailscale.nix ../../modules/k3s.nix
   ../../modules/monitoring.nix ../../modules/cloudflared.nix
-  ../../modules/docker.nix ../../modules/esphome.nix
-  ../../modules/bingo.nix ../../modules/zerodha-kite.nix
+  ../../modules/docker.nix ../../modules/zerodha-kite.nix
   ../../modules/settle-up-mcp.nix
   ../../users/rithviknishad.nix
 ];
@@ -143,8 +142,7 @@ no DNS record for it.
 - `allowInterfaces = [ "enp2s0" ]` — LAN only; multicast never crosses
   Tailscale, and publishing on `cni0`/`flannel.1`/`docker0` would advertise
   unreachable `10.42.x`/`172.17.x` addresses.
-- `openFirewall` — UDP 5353 (also opened by `esphome.nix` for its own reason;
-  both modules stay self-contained).
+- `openFirewall` — UDP 5353.
 - `nssmdns4` — lets the box resolve *other* `*.local` names too.
 
 {: .note }
@@ -204,7 +202,7 @@ the [Kubernetes](kubernetes.md) page.
 ### `cloudflared.nix` — Cloudflare Tunnel
 
 Runs a named tunnel that maps public subdomains of `rithviknishad.dev`
-(`hello`, `photos`, `grafana`, `status`, `esphome`) to `http://localhost:80`
+(`hello`, `photos`, `grafana`, `status`, …) to `http://localhost:80`
 (Traefik), with a default `http_status:404`. Credentials come from a sops
 binary secret. See [Networking](networking.md).
 
@@ -215,17 +213,8 @@ doesn't publish in a usable form (the [care](care.md) backend bakes plugins
 in at image build time; care_fe compiles the API URL into the bundle). The
 `care-images` justfile recipes `docker build` them on the box and import the
 result straight into k3s's containerd (`k3s ctr images import`) — no registry,
-same idea as the Nix-built bingo image. Weekly `autoPrune` keeps build-cache
+same idea as the Nix-built [zerodha-kite](zerodha-kite.md) image. Weekly `autoPrune` keeps build-cache
 layers from eating the pool. Nothing runs under docker; workloads live in k3s.
-
-### `esphome.nix` — host-side ESPHome networking
-
-The ESPHome dashboard runs in k3s with `hostNetwork` ([ESPHome](esphome.md));
-this module opens inbound UDP `5353` so mDNS responses from ESP devices on the
-LAN reach it, and TCP `6052` on the **`cni0` bridge only** so in-cluster
-clients (Traefik ingress, Gatus probe) can reach the host-bound dashboard
-port. 6052 is deliberately **not** opened on the LAN — the UI has no auth;
-it's reached via Tailscale or Cloudflare Access.
 
 ### `monitoring.nix` — host-side metrics glue
 

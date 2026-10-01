@@ -7,7 +7,7 @@
 # Kite is a full cluster-admin console: its ServiceAccount is bound to a ["*"]
 # ClusterRole, and it exposes a web terminal + kubectl console. It is therefore
 # gated by its OWN GitHub OAuth login (declared in the kite-config ConfigMap):
-# only the mapped GitHub user gets in, so — unlike esphome/formance/onvif — the
+# only the mapped GitHub user gets in, so — unlike onvif-console — the
 # public host does NOT need a Cloudflare Access gate in front.
 #
 # Config is declarative: KITE_CONFIG_FILE points at the mounted config.yaml,

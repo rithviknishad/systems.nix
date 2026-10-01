@@ -52,6 +52,9 @@ an `Ingress` with its public host.
 
 ## Workloads
 
+> Retired workloads (ESPHome, Formance Ledger, Bingo, OTS, self-hosted ntfy,
+> Onam Pookalam, SigNoz) were removed in Oct 2026; see git history.
+
 ### Sample smoke test — `k8s/sample.yaml`
 
 A 2-replica `nginxdemos/hello` Deployment + Service + Ingress
@@ -101,75 +104,6 @@ kubectl -n immich get pods -w
 The example secret wires `postgres` and `immich-server` together
 (`DB_HOSTNAME=postgres`, `REDIS_HOSTNAME=redis`, matching DB user/name).
 
-### ESPHome (ESP32 firmware dashboard) — `k8s/esphome/`
-
-Runs with **`hostNetwork: true`** so mDNS discovery and OTA updates reach the
-LAN — the exception to the usual ClusterIP pattern. Deployed via
-`just esphome-deploy`; documented on its own [ESPHome](esphome.md) page.
-
-### Formance Ledger (standalone) — `k8s/formance/`
-
-Programmable double-entry ledger + Console UI, deployed with kustomize plus a
-sops-encrypted Secret (`just formance-deploy`). Only the Console is exposed, at
-`https://ledger.rithviknishad.dev` (behind Cloudflare Access) — the Ledger API
-and Caddy gateway stay in-cluster. Documented on its own
-[Formance Ledger](formance.md) page.
-
-### Bingo (multiplayer game) — `k8s/bingo/`
-
-Classic 1–25 multiplayer bingo ([sonzsara/bingo-app](https://github.com/sonzsara/bingo-app),
-boardgame.io). Deployed with kustomize (`just bingo-deploy`); public at
-`https://bingo.rithviknishad.dev`.
-
-Unlike the other workloads, there is **no upstream or registry image** — the
-image is **built by Nix in this repo and preloaded into k3s**, so the whole
-thing stays declarative and pinned:
-
-```mermaid
-flowchart TB
-    input[flake input: bingo-app pinned] --> pkg[pkgs/bingo<br/>buildNpmPackage + dockerTools]
-    pkg --> img[OCI image bingo-app:latest]
-    img -->|services.k3s.images<br/>modules/bingo.nix| ctr[(containerd)]
-    ctr --> pod[bingo pod :8000]
-    ing[Ingress: bingo.rithviknishad.dev] --> svc[Service bingo :8000] --> pod
-```
-
-- **Single origin.** `server.cjs` (Koa) serves the built SPA *and* the
-  boardgame.io multiplayer API + websocket on one port (8000). The public
-  `VITE_SERVER_URL` is baked at build time so the browser's socket connects
-  same-origin over 443 — the tunnel only forwards `:443 → localhost:80`, never
-  `:8000`, so the app's default `<host>:8000` fallback would fail. Websockets
-  ride the tunnel + Traefik unmodified.
-- **`replicas: 1` is deliberate** — matches live in in-memory boardgame.io
-  storage, so all players in a match must share one process. Scaling out needs
-  a shared storage adapter.
-- **Public by intent, Access-gated today.** It's a party game meant to be
-  public, but `bingo.rithviknishad.dev` currently sits behind Cloudflare Access
-  (a `*.rithviknishad.dev` policy) and answers unauthenticated requests with a
-  login `302`. Exclude the host from that policy to make it truly public. For
-  this reason its [uptime probe](monitoring.md) hits the in-cluster Service
-  (`bingo.bingo.svc:8000`), not the public URL — same as esphome/formance — so
-  a login redirect can't mask a dead backend.
-
-| Component | Image | Notes |
-|---|---|---|
-| `bingo` | `bingo-app:latest` (Nix-built, k3s-preloaded) | SPA + boardgame.io server on `:8000` |
-
-**Deploy / update:**
-
-```sh
-just bingo-deploy                 # apply namespace/deployment/service/ingress
-cloudflared tunnel route dns avocado bingo.rithviknishad.dev   # one-time
-
-# Bump the app to a newer upstream commit:
-just update bingo-app             # then recompute npmDepsHash in pkgs/bingo
-just deploy                       # rebuilds + re-imports the image (restarts k3s)
-kubectl -n bingo rollout restart deploy/bingo
-```
-
-The image reaches the box through the normal `just deploy` (k3s preloads it via
-`services.k3s.images`) — `just bingo-deploy` only applies the manifests.
-
 ### CARE HMIS + TeleICU — `k8s/care/` + `k8s/care-teleicu/`
 
 [Open Healthcare Network](https://ohc.network) CARE (Django API + React SPA +
@@ -195,7 +129,7 @@ upstream publishes no image. Because the console has no auth and relays the
 camera credentials you type in, its public host **must** sit behind Cloudflare
 Access (create the Access app *before* the DNS route), so its
 [uptime probe](monitoring.md) hits the in-cluster Service, not the login-gated
-edge — same as esphome/formance/bingo. WebRTC live video (go2rtc) is omitted on
+edge. WebRTC live video (go2rtc) is omitted on
 purpose (the tunnel can't carry its UDP media); the console falls back to ONVIF
 snapshot polling, which is all the conformance/PTZ testing needs. Run history
 is persisted server-side to a SQLite DB on the `onvif-console-data` PVC (the
@@ -217,25 +151,6 @@ GitHub client secret and a break-glass password inject from the sops Secret. Its
 so it covers the full edge path + cert. Documented on its own [Kite](kite.md)
 page.
 
-### Open Terminology Server — `k8s/ots/`
-
-[Open Terminology Server](https://github.com/ohcnetwork/open-healthcare-terminology-server),
-OHC's read-heavy FHIR-ish terminology API (Starlette + Postgres/pgvector, with a
-Celery worker for embedding jobs — the broker/result backend is Postgres itself,
-no Redis). One upstream image runs as `ots-api` + `ots-worker`. Deployed with
-kustomize plus a sops-encrypted Secret (`just ots-deploy`); public at
-`https://ots.rithviknishad.dev` and on the tailnet at `ots.avocado.local`, and
-reachable in-cluster (e.g. by CARE) at `http://ots-api.ots:8000`. Unlike the
-auth-less tools, it carries its **own API key** — every path is gated by the
-`x-api-key` header except `/health` and the Swagger assets — so, like Kite, its
-public host does **not** need a Cloudflare Access gate. The image is **built on
-the box with docker** (`just ots-images`) and imported into k3s's containerd
-(upstream publishes no image); an initContainer runs `alembic upgrade head` on
-start. Vector search uses **CPU-only FastEmbed** (`bge-small-en-v1.5`), cached
-on a shared data PVC — the box has no GPU. The server boots empty; terminologies
-(SNOMED CT, LOINC, ICD) are imported with its CLI from release files staged on
-the data PVC. Documented on its own [Terminology Server](ots.md) page.
-
 ### Attic (Nix binary cache) — `k8s/attic/`
 
 [Attic](https://github.com/zhaofengli/attic), a self-hostable Nix binary cache
@@ -251,41 +166,6 @@ in-cluster at `http://atticd.attic.svc:8080`), which also sidesteps the edge's
 ~100 MB request-body cap on pushes. Its [uptime probe](monitoring.md) hits the
 token-less in-cluster root route. Documented on its own [Attic](attic.md) page.
 
-### ntfy (notifications) — `k8s/ntfy/`
-
-[ntfy](https://ntfy.sh), a self-hosted pub/sub push notification server: `POST`
-to a topic URL and every subscribed phone, browser or script gets a push. Like
-Attic it uses the **upstream image** (`binwiederhier/ntfy`) directly. One
-`ntfy serve` process is the whole service — message cache, user/ACL/token
-database and attachments are all **SQLite + files on one 10 Gi PVC** (no
-Postgres, no broker). Deployed with kustomize plus a sops-encrypted Secret
-(`just ntfy-deploy`). Public at `https://ntfy.rithviknishad.dev`, on the tailnet
-at `ntfy.avocado.local`, and in-cluster at `http://ntfy.ntfy.svc:8080`. Auth is
-its own: `auth-default-access: deny-all` with users, topic ACLs and bearer
-tokens **declared in the sops secret** (`NTFY_AUTH_USERS` / `_ACCESS` /
-`_TOKENS`) and applied at startup — so, like Kite and OTS, its public host does
-**not** need a Cloudflare Access gate. Prometheus metrics are exposed on a
-dedicated `:9090` port (never on the public `:8080`) and scraped by a
-`VMServiceScrape`. Note the alert stack still pushes to **ntfy.sh**, so a dead
-self-hosted ntfy can still page us. Documented on its own [ntfy](ntfy.md) page.
-
-### Onam Pookalam Vote — `k8s/ohc-pookalam/`
-
-[`rithviknishad/ohc-pookalam`](https://github.com/rithviknishad/ohc-pookalam),
-a small voting site for the OHC Network's Onam pookalam contest (Next.js 16,
-`output: standalone`). Like CARE it is **built on the box** with `docker build`
-from the upstream Dockerfile and imported into containerd
-(`just ohc-pookalam-images`) — the image does a `pnpm install` plus a native
-`better-sqlite3` compile, which isn't worth nixifying. All state is **one
-SQLite file** on a 1 Gi PVC, so it runs `replicas: 1` with `strategy: Recreate`
-— a correctness constraint (single writer, RWO volume), not a capacity one.
-Deployed with kustomize plus an **optional** sops Secret
-(`just ohc-pookalam-deploy`); `GITHUB_TOKEN` only lifts the api.github.com
-rate limit for username lookups. Public at
-`https://ohc-pookalam.rithviknishad.dev` with **no** Cloudflare Access gate —
-anyone in the community is meant to open the link and vote. Documented on its
-own [Onam Pookalam Vote](ohc-pookalam.md) page.
-
 ### Zerodha Kite MCP server — `k8s/zerodha-kite/`
 
 [`zerodha/kite-mcp-server`](https://github.com/zerodha/kite-mcp-server), a Go
@@ -293,7 +173,7 @@ own [Onam Pookalam Vote](ohc-pookalam.md) page.
 trading API** to AI clients. Built by Nix (`pkgs/zerodha-kite`, `buildGoModule`
 + `dockerTools`) from the pinned `kite-mcp-server` flake input and preloaded
 into k3s via `services.k3s.images` (`modules/zerodha-kite.nix`) during
-`just deploy` — same no-registry pattern as Bingo. Runs in `hybrid` mode
+`just deploy` — no registry involved. Runs in `hybrid` mode
 (serves both `/mcp` and `/sse`). Exposed over the **tailnet only** at
 `https://avocado.orthrus-bass.ts.net:8443`: the pod speaks plain HTTP on a
 fixed **NodePort** (`30080`), and a **Tailscale `serve`** front door
@@ -331,29 +211,10 @@ Settle Up backend, can delete real groups and transactions, and holds the
 account password.
 Documented on its own [Settle Up](settle-up-mcp.md) page.
 
-### SigNoz (OpenTelemetry APM) — `k8s/signoz/`
-
-[SigNoz](https://signoz.io) — distributed traces, logs and metrics from
-**instrumented applications**, stored in ClickHouse. Installed from the upstream
-Helm chart (`helmfile.yaml` + `values.yaml`), with a thin kustomize layer for
-the namespace, the Ingress and a `VMServiceScrape`. It is the second helmfile
-workload on the box, and by some margin the heaviest addition: ClickHouse +
-Zookeeper + the query service + an OTel collector, capped at ~4.5 Gi of memory
-limits between them because upstream ships no limits at all and this node is
-shared with everything above.
-
-It does **not** replace `k8s/monitoring` — that stack still owns host, disk and
-cluster telemetry, and in fact watches SigNoz (Gatus probes both the query and
-ingest halves; VMAgent scrapes the collector). Apps send OTLP to
-`signoz-otel-collector.signoz.svc:4317`. The UI is **tailnet-only**
-(`signoz.avocado.local`): SigNoz's first visitor creates the admin account, so
-it is not published through the tunnel. `just signoz-deploy`.
-Documented on its own [SigNoz](signoz.md) page.
-
 ### suchi (document archive) — `k8s/suchi/`
 
 [suchi](https://suchi.page), a self-filing document archive (OCR, Johnny.Decimal
-filing, full-text search, mobile Companion app). Like ntfy it uses the
+filing, full-text search, mobile Companion app). Like Attic it uses the
 **upstream image** directly — the `-full` variant (adds OCRmyPDF), pinned by
 digest. One `suchi serve` process is the whole service: **SQLite +
 content-addressed blobs + a credential key on one 50 Gi PVC**, single replica
@@ -371,8 +232,3 @@ The largest thing on the cluster is the observability stack under
 `k8s/monitoring/` (VictoriaMetrics + Grafana + logs + uptime). It has its own
 deploy flow (helmfile + kustomize) and is documented separately on the
 [Monitoring](monitoring.md) page.
-
-`k8s/signoz/` is the second-largest, and the second helmfile-based workload:
-ClickHouse + Zookeeper + an OTel collector + the SigNoz query service, for
-**application** traces/logs/metrics. It is documented on its own
-[SigNoz](signoz.md) page.

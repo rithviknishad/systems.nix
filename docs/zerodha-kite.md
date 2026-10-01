@@ -27,8 +27,8 @@ the k3s cluster under `k8s/zerodha-kite/`.
 
 ## Architecture
 
-The server is built by Nix from a pinned source and preloaded into k3s — the
-same no-registry pattern as [Bingo](kubernetes.md#bingo-multiplayer-game--k8sbingo).
+The server is built by Nix from a pinned source and preloaded into k3s — no
+registry involved, so the image stays declarative and pinned.
 
 ```mermaid
 graph TD

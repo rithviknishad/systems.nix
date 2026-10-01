@@ -208,69 +208,6 @@ backups-status:
     echo "--- dumps on disk ---"
     ssh {{NIX_SSHOPTS}} {{target}} 'for d in /var/lib/rancher/k3s/storage/*-db-backups; do [ -d "$d" ] || continue; echo "$d:"; ls -lh "$d" | tail -n +2; echo; done' || echo '(could not read storage dir)'
 
-# --- ESPHome (dashboard for ESP32/ESP8266 firmware) --------------------------
-# Runs in k3s with hostNetwork (mDNS/OTA need the LAN). Dashboard:
-#   http://avocado:6052 (Tailscale) or https://esphome.rithviknishad.dev
-#   (Cloudflare Tunnel + Access). See docs/esphome.md.
-
-# Deploy/upgrade ESPHome: manifests + secrets.yaml from sops (no temp file),
-# then restart so the (subPath-mounted, non-live-updating) secret is picked up.
-esphome-deploy:
-    KUBECONFIG={{kubeconfig_path}} kubectl apply -k k8s/esphome
-    sops --decrypt secrets/esphome.enc.yaml \
-        | KUBECONFIG={{kubeconfig_path}} kubectl -n esphome create secret generic esphome-secrets \
-            --from-file=secrets.yaml=/dev/stdin --dry-run=client -o yaml \
-        | KUBECONFIG={{kubeconfig_path}} kubectl apply -f -
-    KUBECONFIG={{kubeconfig_path}} kubectl -n esphome rollout restart deploy/esphome
-
-# Show the state of the esphome namespace.
-esphome-status:
-    KUBECONFIG={{kubeconfig_path}} kubectl -n esphome get pods,svc,ingress,pvc
-
-# Tail the ESPHome dashboard logs.
-esphome-logs:
-    KUBECONFIG={{kubeconfig_path}} kubectl -n esphome logs -f deploy/esphome
-
-# Edit the sops-encrypted ESPHome secrets (WiFi creds etc.). Redeploy after.
-esphome-secrets:
-    sops secrets/esphome.enc.yaml
-
-# Re-encrypt the ESPHome secret after changing recipients in .sops.yaml.
-esphome-secrets-rekey:
-    sops updatekeys secrets/esphome.enc.yaml
-
-# --- Formance Ledger (standalone) --------------------------------------------
-# Path A of the roadmap: Ledger + worker + Caddy gateway + Console UI + a
-# dedicated Postgres, all in the `formance` namespace (k8s/formance). Console:
-#   https://ledger.rithviknishad.dev  (Cloudflare Tunnel + Access)
-#   http://avocado (Host: ledger.avocado.local) over Tailscale.
-# See docs/formance.md.
-
-# Deploy/upgrade Formance: manifests via kustomize, then the sops-encrypted
-# k8s Secret piped straight into kubectl (plaintext never touches disk).
-formance-deploy:
-    KUBECONFIG={{kubeconfig_path}} kubectl apply -k k8s/formance
-    sops --decrypt secrets/formance.enc.yaml \
-        | KUBECONFIG={{kubeconfig_path}} kubectl apply -f -
-
-# Show the state of the formance namespace.
-formance-status:
-    KUBECONFIG={{kubeconfig_path}} kubectl -n formance get pods,svc,ingress,pvc
-
-# Tail the ledger API server logs (use worker/gateway/console for the others).
-formance-logs component="ledger":
-    KUBECONFIG={{kubeconfig_path}} kubectl -n formance logs -f deploy/{{component}}
-
-# Edit the sops-encrypted Formance secret (DB password, POSTGRES_URI,
-# COOKIE_SECRET). After changing it, `rollout restart` the consumers to pick
-# it up (env-from-secret pods don't auto-reload), then formance-deploy.
-formance-secrets:
-    sops secrets/formance.enc.yaml
-
-# Re-encrypt the Formance secret after changing recipients in .sops.yaml.
-formance-secrets-rekey:
-    sops updatekeys secrets/formance.enc.yaml
-
 # --- Kite (Kubernetes dashboard) ---------------------------------------------
 # Full cluster-admin console on k3s (k8s/kite). Gated by its OWN GitHub OAuth
 # (only the mapped GitHub user gets in), so no Cloudflare Access in front.
@@ -377,31 +314,6 @@ settle-up-mcp-secrets:
 # Re-encrypt the Settle Up MCP secret after changing recipients in .sops.yaml.
 settle-up-mcp-secrets-rekey:
     sops updatekeys secrets/settle-up-mcp.enc.yaml
-
-# --- Bingo (boardgame.io multiplayer party game) -----------------------------
-# Single-origin app: server.cjs (Koa) serves the built SPA *and* the
-# boardgame.io multiplayer API/websocket on :8000. The image is built by Nix
-# (pkgs/bingo, from the pinned `bingo-app` flake input) and preloaded into k3s
-# via services.k3s.images (modules/bingo.nix) during `just deploy` — no
-# registry. Public at https://bingo.rithviknishad.dev. See docs/kubernetes.md.
-
-# Deploy the bingo manifests (namespace, deployment, service, ingress).
-# The image itself lands on the box via `just deploy` (k3s preload), not here.
-bingo-deploy:
-    KUBECONFIG={{kubeconfig_path}} kubectl apply -k k8s/bingo
-
-# Show the state of the bingo namespace.
-bingo-status:
-    KUBECONFIG={{kubeconfig_path}} kubectl -n bingo get pods,svc,ingress
-
-# Tail the bingo server logs.
-bingo-logs:
-    KUBECONFIG={{kubeconfig_path}} kubectl -n bingo logs -f deploy/bingo
-
-# Build the OCI image locally to inspect it (deploy preloads it into k3s for
-# real; this is just for debugging the build).
-bingo-image:
-    nix build .#packages.x86_64-linux.bingo-image
 
 # --- CARE (Open Healthcare Network HMIS + TeleICU) ---------------------------
 # Two stacks: k8s/care (VersityGW + Postgres + Redis + Django API/celery + SPA
@@ -721,71 +633,6 @@ care-dns:
     for h in care care-api care-teleicu-gateway care-teleicu-devices mock-ptz-camera; do \
         cloudflared tunnel route dns avocado "$h.rithviknishad.dev"; done
 
-# --- Onam Pookalam Vote (rithviknishad/ohc-pookalam) -------------------------
-# A small GitHub-username-gated voting site for the OHC Network (Next.js 16 +
-# SQLite). Public at https://ohc-pookalam.rithviknishad.dev, on the tailnet via
-# Host: ohc-pookalam.avocado.local. The upstream repo ships its own Dockerfile
-# (standalone Next build + native better-sqlite3), so the image is built ON the
-# box with docker and imported into k3s's containerd — no registry, same
-# pattern as the care images above. See docs/ohc-pookalam.md.
-
-# Clone-then-build (not a flake input) because the Dockerfile does a pnpm
-# install plus a node-gyp compile of better-sqlite3 that isn't worth nixifying.
-# Uses the same .build/ scratch dir as the care image recipes. Import goes
-# through root ssh (same passwordless path as `just deploy`) — k3s ctr needs
-# root. Re-run to ship new upstream code, then `just ohc-pookalam-deploy`.
-# Build + import the app image (defaults to the master branch).
-ohc-pookalam-images ref="master":
-    rm -rf .build/ohc-pookalam
-    mkdir -p .build
-    git clone --depth 1 --branch {{ref}} https://github.com/rithviknishad/ohc-pookalam .build/ohc-pookalam
-    docker build -t ohc-pookalam:local .build/ohc-pookalam
-    docker save ohc-pookalam:local | ssh {{NIX_SSHOPTS}} {{target}} 'k3s ctr images import -'
-
-# The sops-encrypted Secret is piped straight into kubectl (plaintext never
-# touches disk). Ends with a rollout restart so a freshly imported image or a
-# changed secret is actually picked up.
-# Deploy/upgrade the pookalam site: kustomize + sops Secret + rollout restart.
-ohc-pookalam-deploy:
-    KUBECONFIG={{kubeconfig_path}} kubectl apply -k k8s/ohc-pookalam
-    # The Secret is optional by design (envFrom sets optional: true), so a
-    # first deploy without a PAT still works — skip it if it isn't there yet.
-    if [ -f secrets/ohc-pookalam.enc.yaml ]; then sops --decrypt secrets/ohc-pookalam.enc.yaml | KUBECONFIG={{kubeconfig_path}} kubectl apply -f -; else echo "note: secrets/ohc-pookalam.enc.yaml missing — running on the anonymous GitHub API rate limit (60/h)"; fi
-    KUBECONFIG={{kubeconfig_path}} kubectl -n ohc-pookalam rollout restart deploy/ohc-pookalam
-
-# Show the state of the ohc-pookalam namespace.
-ohc-pookalam-status:
-    KUBECONFIG={{kubeconfig_path}} kubectl -n ohc-pookalam get pods,svc,ingress,pvc
-
-# Tail the app logs.
-ohc-pookalam-logs:
-    KUBECONFIG={{kubeconfig_path}} kubectl -n ohc-pookalam logs -f deploy/ohc-pookalam
-
-# The votes are the ONLY state here and the PVC sits on the no-redundancy ZFS
-# stripe — run this before any risky change, and after the vote closes. Tars
-# all of /data: the .db file alone can miss votes still in the -wal.
-# Copy the SQLite database out of the pod (votes backup).
-ohc-pookalam-backup dest="pookalam-backup":
-    mkdir -p {{dest}}
-    KUBECONFIG={{kubeconfig_path}} kubectl -n ohc-pookalam exec deploy/ohc-pookalam -- \
-        tar cf - -C /data . > {{dest}}/pookalam-data.tar
-    @echo "wrote {{dest}}/pookalam-data.tar"
-
-# GITHUB_TOKEN — a scope-less PAT that lifts the api.github.com username-lookup
-# rate limit from 60/h to 5000/h. Redeploy after to apply.
-# Edit the sops-encrypted pookalam secret.
-ohc-pookalam-secrets:
-    sops secrets/ohc-pookalam.enc.yaml
-
-# Re-encrypt the secret after changing recipients in .sops.yaml.
-ohc-pookalam-secrets-rekey:
-    sops updatekeys secrets/ohc-pookalam.enc.yaml
-
-# Needs the cloudflared login cert (cloudflared tunnel login) on this machine.
-# One-time: point the public hostname at the tunnel.
-ohc-pookalam-dns:
-    cloudflared tunnel route dns avocado ohc-pookalam.rithviknishad.dev
-
 # --- ONVIF Camera Testing Console (10bedicu/onvif-console) --------------------
 # Vendor-neutral ONVIF PTZ testing console (k8s/onvif-console). Public host is
 # Access-gated (no auth of its own; relays camera credentials). See
@@ -821,60 +668,6 @@ onvif-console-status:
 # Tail the console logs.
 onvif-console-logs:
     KUBECONFIG={{kubeconfig_path}} kubectl -n onvif-console logs -f deploy/onvif-console
-
-# --- Open Terminology Server (ohcnetwork/open-healthcare-terminology-server) --
-# FHIR-ish terminology API (Postgres + pgvector), single image run as api +
-# celery worker (k8s/ots). Public host is app-key gated (x-api-key), no Access
-# gate. CPU FastEmbed (bge-small-en-v1.5) for vector search.
-#   https://ots.rithviknishad.dev/docs        Swagger (public path)
-#   http://avocado (Host: ots.avocado.local)  over Tailscale
-#   http://ots-api.ots:8000                   in-cluster (CARE), send x-api-key
-# See docs/ots.md.
-
-ots_build := ".build"
-
-# Build + import the OTS image. Same no-registry pattern as care-images:
-# docker build on this machine, then pipe `docker save` into k3s's containerd
-# over root ssh. Pass a git ref to pin (defaults to main).
-ots-images ref="main":
-    rm -rf {{ots_build}}/ots
-    mkdir -p {{ots_build}}
-    git clone --depth 1 --branch {{ref}} https://github.com/ohcnetwork/open-healthcare-terminology-server {{ots_build}}/ots
-    docker build -t open-terminology-server:local {{ots_build}}/ots
-    docker save open-terminology-server:local | ssh {{NIX_SSHOPTS}} {{target}} 'k3s ctr images import -'
-
-# Deploy/upgrade OTS: manifests via kustomize, then the sops-encrypted Secret
-# piped straight into kubectl (plaintext never touches disk). Secret changes
-# need a rollout restart of the consumers to be seen.
-ots-deploy:
-    KUBECONFIG={{kubeconfig_path}} kubectl apply -k k8s/ots
-    sops --decrypt secrets/ots.enc.yaml \
-        | KUBECONFIG={{kubeconfig_path}} kubectl apply -f -
-
-# Show the state of the ots namespace.
-ots-status:
-    KUBECONFIG={{kubeconfig_path}} kubectl -n ots get pods,svc,ingress,pvc
-
-# Tail an OTS component's logs (ots-api, ots-worker, postgres).
-ots-logs component="ots-api":
-    KUBECONFIG={{kubeconfig_path}} kubectl -n ots logs -f deploy/{{component}}
-
-# Run the OTS CLI inside the api pod (e.g. `just ots-cli icd download`,
-# `just ots-cli common embed -- --help`). See docs/ots.md "Loading data".
-ots-cli *args:
-    KUBECONFIG={{kubeconfig_path}} kubectl -n ots exec -it deploy/ots-api -- python -m ots.cli {{args}}
-
-# Edit the sops-encrypted OTS secret (see k8s/ots/secret.example.yaml).
-ots-secrets:
-    sops secrets/ots.enc.yaml
-
-ots-secrets-rekey:
-    sops updatekeys secrets/ots.enc.yaml
-
-# One-time: point the public OTS hostname at the tunnel. Needs the cloudflared
-# login cert (cloudflared tunnel login) on this machine.
-ots-dns:
-    cloudflared tunnel route dns avocado ots.rithviknishad.dev
 
 # --- Attic (self-hostable Nix binary cache) ----------------------------------
 # A single `atticd` (API + GC) backed by SQLite + a local NAR/chunk store on one
@@ -915,73 +708,6 @@ attic-secrets:
 
 attic-secrets-rekey:
     sops updatekeys secrets/attic.enc.yaml
-
-# --- ntfy (self-hosted push notification server) -----------------------------
-# One `ntfy serve` process: message cache, user/ACL/token DB and attachments all
-# live on a single PVC (SQLite, no separate database). Public image, so no
-# build-on-box step. Everything is gated by ntfy's own auth
-# (auth-default-access: deny-all) rather than Cloudflare Access, because the
-# publishers are token-holding scripts. Users/ACLs/tokens are declared in the
-# sops secret and applied at startup.
-#   https://ntfy.rithviknishad.dev             web app / PWA, public
-#   http://avocado (Host: ntfy.avocado.local)  over Tailscale / LAN
-#   http://ntfy.ntfy.svc:8080                  in-cluster
-# See docs/ntfy.md.
-
-# The NTFY_AUTH_* entries are only read at process start, so a secret change
-# needs the rollout restart at the end.
-# Deploy/upgrade ntfy: kustomize manifests + sops Secret + rollout restart.
-ntfy-deploy:
-    KUBECONFIG={{kubeconfig_path}} kubectl apply -k k8s/ntfy
-    sops --decrypt secrets/ntfy.enc.yaml \
-        | KUBECONFIG={{kubeconfig_path}} kubectl apply -f -
-    KUBECONFIG={{kubeconfig_path}} kubectl -n ntfy rollout restart deploy/ntfy
-
-# Show the state of the ntfy namespace.
-ntfy-status:
-    KUBECONFIG={{kubeconfig_path}} kubectl -n ntfy get pods,svc,ingress,pvc
-
-# Tail the ntfy server logs (JSON).
-ntfy-logs:
-    KUBECONFIG={{kubeconfig_path}} kubectl -n ntfy logs -f deploy/ntfy
-
-# Use it for the few things that aren't declarative:
-#   just ntfy-cli user list          -> what's actually in user.db
-#   just ntfy-cli access             -> the effective ACL table
-#   just ntfy-cli user del <name>    -> removing from the secret does NOT delete
-# Run the ntfy CLI inside the running pod.
-ntfy-cli *args:
-    KUBECONFIG={{kubeconfig_path}} kubectl -n ntfy exec -it deploy/ntfy -- ntfy {{args}}
-
-# No running server needed, so this works before the first deploy. Both
-# subcommands are offline — nothing is written anywhere:
-#   just ntfy-gen user hash          -> bcrypt hash for NTFY_AUTH_USERS
-#   just ntfy-gen token generate     -> tk_... for NTFY_AUTH_TOKENS
-# Run the ntfy CLI in a THROWAWAY pod (to bootstrap the secret).
-ntfy-gen *args:
-    KUBECONFIG={{kubeconfig_path}} kubectl run ntfy-gen --rm -it --restart=Never \
-        --image=binwiederhier/ntfy:v2.27.0 -- {{args}}
-
-# The token is passed as an argument, so it lands in your shell history — use a
-# throwaway/narrow one. It must have write access to the topic.
-# Publish a test message over the public edge (proves auth + delivery).
-ntfy-test topic token message="hello from just":
-    curl -sS -H "Authorization: Bearer {{token}}" -d '{{message}}' \
-        https://ntfy.rithviknishad.dev/{{topic}}
-
-# See k8s/ntfy/secret.example.yaml for the format. Redeploy after to apply.
-# Edit the sops-encrypted ntfy secret (NTFY_AUTH_USERS / _ACCESS / _TOKENS).
-ntfy-secrets:
-    sops secrets/ntfy.enc.yaml
-
-# Re-encrypt the ntfy secret after changing recipients in .sops.yaml.
-ntfy-secrets-rekey:
-    sops updatekeys secrets/ntfy.enc.yaml
-
-# Needs the cloudflared login cert (cloudflared tunnel login) on this machine.
-# One-time: point the public ntfy hostname at the tunnel.
-ntfy-dns:
-    cloudflared tunnel route dns avocado ntfy.rithviknishad.dev
 
 # --- suchi (self-hosted document archive) ------------------------------------
 # One `suchi serve` process: SQLite + content-addressed blobs + the credential
@@ -1031,74 +757,3 @@ suchi-ui:
 # One-time: point the public suchi hostname at the tunnel.
 suchi-dns:
     cloudflared tunnel route dns avocado suchi.rithviknishad.dev
-
-# --- SigNoz (OpenTelemetry APM: traces + logs + metrics) ---------------------
-# ClickHouse + Zookeeper + the SigNoz query service + an OTel collector, from
-# the upstream helm chart (k8s/signoz). This is the APPLICATION observability
-# stack; k8s/monitoring (VictoriaMetrics/Grafana/Vector) still owns host and
-# cluster infrastructure telemetry. Not exposed publicly — reach the UI only
-# over Tailscale at http://avocado (Host: signoz.avocado.local), or with
-# `just signoz-ui`. Apps send OTLP to signoz-otel-collector.signoz.svc:4317
-# (gRPC) / :4318 (HTTP). See docs/signoz.md.
-
-# The ClickHouse password is sops-decrypted from secrets/signoz.enc.yaml into
-# the gitignored values-secret.yaml just before `helmfile sync` (the monitoring
-# stack does the same thing — helm needs a file, not a stream). First run pulls
-# ~2GB of images and migrates the ClickHouse schema; the helmfile timeout is
-# 20min for that reason.
-# Deploy/upgrade SigNoz: namespace + helm release + ingress layer.
-signoz-deploy:
-    sops --decrypt secrets/signoz.enc.yaml > k8s/signoz/values-secret.yaml
-    KUBECONFIG={{kubeconfig_path}} kubectl apply -f k8s/signoz/namespace.yaml
-    KUBECONFIG={{kubeconfig_path}} helmfile sync --file k8s/signoz/helmfile.yaml
-    KUBECONFIG={{kubeconfig_path}} kubectl apply -k k8s/signoz
-
-# Show the state of the signoz namespace (pods, services, ingress, volumes).
-signoz-status:
-    KUBECONFIG={{kubeconfig_path}} kubectl -n signoz get pods,svc,ingress,pvc
-
-# 3301 is SigNoz's own conventional port, kept so muscle memory works.
-# Port-forward the SigNoz UI to http://localhost:3301 (no tailnet DNS needed).
-signoz-ui:
-    KUBECONFIG={{kubeconfig_path}} kubectl -n signoz port-forward svc/signoz 3301:8080
-
-# Tail the query service logs (the first place to look for UI/query errors).
-signoz-logs:
-    KUBECONFIG={{kubeconfig_path}} kubectl -n signoz logs -f deploy/signoz
-
-# Where dropped/rejected spans show up when an instrumented app says it
-# exported but nothing lands in the UI.
-# Tail the OTel collector (ingest) logs.
-signoz-collector-logs:
-    KUBECONFIG={{kubeconfig_path}} kubectl -n signoz logs -f deploy/signoz-otel-collector
-
-# For checking table sizes/TTLs when the volume grows, e.g.
-#   SELECT table, formatReadableSize(sum(bytes)) FROM system.parts
-#     WHERE active GROUP BY table ORDER BY sum(bytes) DESC;
-# The pod name is generated by the Altinity operator
-# (chi-<chi>-<cluster>-<shard>-<replica>-0), so resolve it by label rather than
-# hardcoding a name that a chart bump could change.
-# Open a clickhouse-client shell inside the ClickHouse pod.
-signoz-clickhouse:
-    #!/usr/bin/env sh
-    set -eu
-    export KUBECONFIG={{ kubeconfig_path }}
-    pod=$(kubectl -n signoz get pod -l clickhouse.altinity.com/chi=signoz-clickhouse \
-        -o jsonpath='{.items[0].metadata.name}')
-    exec kubectl -n signoz exec -it "$pod" -- clickhouse-client
-
-# Edit the sops-encrypted SigNoz secret (the ClickHouse password). Redeploy after.
-signoz-secrets:
-    sops secrets/signoz.enc.yaml
-
-# Re-encrypt the SigNoz secret after changing recipients in .sops.yaml.
-signoz-secrets-rekey:
-    sops updatekeys secrets/signoz.enc.yaml
-
-# DESTRUCTIVE: the namespace's PVCs use `local-path` (reclaimPolicy Delete), so
-# the ClickHouse telemetry history and the SigNoz dashboard/alert SQLite DB go
-# with it. Keeps the namespace itself. Confirm with the operator before running.
-# Remove the SigNoz helm release + ingress layer (DESTROYS the telemetry data).
-signoz-destroy:
-    -KUBECONFIG={{kubeconfig_path}} kubectl delete -k k8s/signoz
-    KUBECONFIG={{kubeconfig_path}} helmfile destroy --file k8s/signoz/helmfile.yaml

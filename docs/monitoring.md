@@ -13,13 +13,6 @@ push notifications. It lives in `k8s/monitoring/` and mirrors
 [`tellmeY18/retire.nix`](https://github.com/tellmeY18/retire.nix), trimmed to
 this single-node box.
 
-{: .note }
-> This page is about **infrastructure** telemetry — is the box healthy? For
-> **application** telemetry (traces/spans from instrumented services) there is a
-> separate [SigNoz](signoz.md) stack in `k8s/signoz/`. This stack watches that
-> one, not the reverse: Gatus probes both SigNoz halves and VMAgent scrapes its
-> collector, so a ClickHouse outage still has a watchdog outside itself.
-
 ## Big picture
 
 ```mermaid
@@ -279,11 +272,10 @@ group (`ui.default-sort-by: group`):
 
 | Group | Endpoints | "Up" means | ntfy topic |
 |---|---|---|---|
-| `internal` | Grafana / VMSingle / VictoriaLogs `/health`, blackbox-exporter `/-/healthy`, ESPHome `/`, ntfy `/v1/health`, [suchi](suchi.md) `/readyz`, Pookalam vote `/`, the MCP servers (Kite `/`, Settle Up `/health`), [SigNoz](signoz.md) query `/api/v1/health` + collector `health_check` | `[STATUS] == 200` | `avocado-alerts` |
-| `public` | `rithviknishad.dev`, `photos.rithviknishad.dev` (Immich `/api/server/ping`), `kite.rithviknishad.dev` (`/healthz`), `ntfy.rithviknishad.dev` (`/v1/health`), `suchi.rithviknishad.dev` (`/readyz`), `ohc-pookalam.rithviknishad.dev` (`/`) | 200 + body + TLS-expiry | `avocado-alerts` |
+| `internal` | Grafana / VMSingle / VictoriaLogs `/health`, blackbox-exporter `/-/healthy`, [suchi](suchi.md) `/readyz`, the MCP servers (Kite `/`, Settle Up `/health`) | `[STATUS] == 200` | `avocado-alerts` |
+| `public` | `rithviknishad.dev`, `photos.rithviknishad.dev` (Immich `/api/server/ping`), `kite.rithviknishad.dev` (`/healthz`), `suchi.rithviknishad.dev` (`/readyz`) | 200 + body + TLS-expiry | `avocado-alerts` |
 | `ohcnetwork/care` | CARE public edges (`care-api /ping/`, SPA, `/api/abdm/health`, ABDM MFE `remoteEntry.js`, gateway `/`, devices MFE `/health`) + in-cluster (VersityGW, middleware, RTSPtoWeb) | 200 (+ TLS-expiry on public) | `avocado-alerts` |
 | `ohcnetwork/teleicu/cameras` | Mock PTZ camera (in-cluster + public edge) and the physical ONVIF cameras (`matrix-cctv`, `prama-cctv`, `cpplus-cctv`) as raw TCP connects to RTSP `:554` | mock: reachable + non-5xx; physical: `[CONNECTED] == true` | `avocado-alerts` |
-| `ohcnetwork/ots` | Open Terminology Server: public edge + in-cluster `/health` | 200 (+ TLS-expiry on public) | `avocado-alerts` |
 | `ABDM-SBX` | ABDM **sandbox**: NHPR (`/v4/`) / ABHA / HIECM | reachable + non-5xx | `avocado-abdm` (prio 4) |
 | `ABDM-LIVE` | ABDM **live**: NHPR (`/v4/`) / ABHA / HIECM | reachable + non-5xx | `avocado-abdm` (prio 5) |
 
@@ -304,7 +296,7 @@ Two independent pipelines push to ntfy across two topics:
 
 | Topic | Fed by |
 |---|---|
-| `avocado-alerts` | Alertmanager bridge + Gatus `internal`/`public`/`ohcnetwork/care`/`ohcnetwork/ots` groups |
+| `avocado-alerts` | Alertmanager bridge + Gatus `internal`/`public`/`ohcnetwork/care` groups |
 | `avocado-abdm` | Gatus `ABDM-SBX`/`ABDM-LIVE` groups (third-party, kept separate) |
 
 > Topic names are set in `ntfy-alertmanager.yaml` and `gatus.yaml` (top-level
@@ -312,11 +304,10 @@ Two independent pipelines push to ntfy across two topics:
 > names are readable by anyone. For an authenticated topic, put the token in
 > `secrets/monitoring.enc.yaml` and reference it from a Secret.
 
-> **Why not the self-hosted server?** avocado also runs its own ntfy at
-> `ntfy.rithviknishad.dev` ([ntfy](ntfy.md)), but both alert pipelines still
-> target **ntfy.sh** on purpose: an alerting channel that lives on the box it
-> watches goes silent exactly when the box breaks. Keep that split — or, if you
-> do migrate, keep at least the host-level alerts on ntfy.sh.
+> **Why ntfy.sh and not self-hosted?** Both alert pipelines target the hosted
+> **ntfy.sh** on purpose: an alerting channel that lives on the box it watches
+> goes silent exactly when the box breaks. Keep at least the host-level alerts
+> off avocado.
 
 ## Network policies
 

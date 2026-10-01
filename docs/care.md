@@ -51,9 +51,8 @@ Adding another MFE plug = one more `/mfe-plugs/<slug>` path rule + image.
 The CARE hosts are public by design — CARE brings its own auth. Uploads are
 capped at ~100 MB by Cloudflare's free-plan request-body limit. The mock
 camera is a synthetic test fixture with only baked-in `admin`/`admin` Basic
-auth and, unlike the other credential-relaying tools
-([ONVIF console](onvif-console.md), [ESPHome](esphome.md),
-[Ledger](formance.md)), is **not** behind Cloudflare Access — it holds nothing
+auth and, unlike the credential-relaying
+[ONVIF console](onvif-console.md), is **not** behind Cloudflare Access — it holds nothing
 sensitive and only ever serves a synthetic feed.
 
 ## Architecture
@@ -210,7 +209,7 @@ just care-register-abdm     # register the ABDM MFE (plug_config API)
 just care-wire-devices <facility-uuid>   # TeleICU gateway/cameras/vitals devices (then set GATEWAY_DEVICE_ID)
 ```
 
-Secrets follow the Formance pattern: a full k8s `Secret` manifest lives
+Secrets follow the usual pattern: a full k8s `Secret` manifest lives
 sops-encrypted in `secrets/*.enc.yaml` and is piped straight from `sops -d`
 into `kubectl apply` — plaintext never touches disk. The `secret.example.yaml`
 files document every key, including how to generate stable `JWKS_BASE64` key
