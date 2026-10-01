@@ -101,6 +101,12 @@ in
         # break the token-authenticated publishers and the app's long-lived
         # subscribe streams. See docs/ntfy.md.
         "ntfy.rithviknishad.dev" = "http://localhost:80";
+        # suchi document archive (k8s/suchi) — public by design: the Suchi
+        # Companion mobile app and API-token clients talk to it from anywhere.
+        # suchi gates everything with its own accounts (/metrics is admin-only),
+        # so NO Cloudflare Access gate — an SSO wall would break the app's API
+        # calls. See docs/suchi.md.
+        "suchi.rithviknishad.dev" = "http://localhost:80";
       };
     };
   };

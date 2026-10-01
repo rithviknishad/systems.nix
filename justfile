@@ -983,6 +983,55 @@ ntfy-secrets-rekey:
 ntfy-dns:
     cloudflared tunnel route dns avocado ntfy.rithviknishad.dev
 
+# --- suchi (self-hosted document archive) ------------------------------------
+# One `suchi serve` process: SQLite + content-addressed blobs + the credential
+# key, all on one 50Gi PVC (local-path-retain, so it survives a namespace
+# delete). Upstream -full image (OCRmyPDF) pinned by digest; no secret needed.
+# Gated by suchi's own accounts rather than Cloudflare Access, because the
+# Companion mobile app and API-token clients must reach it directly.
+#   https://suchi.rithviknishad.dev   web app + API, public
+#   http://suchi.suchi.svc:8000       in-cluster
+# See docs/suchi.md.
+
+# Deploy/upgrade suchi (kustomize). Upgrades = bump the digest in
+# k8s/suchi/suchi.yaml after the backup checklist in docs/suchi.md.
+suchi-deploy:
+    KUBECONFIG={{kubeconfig_path}} kubectl apply -k k8s/suchi
+
+# Show the state of the suchi namespace.
+suchi-status:
+    KUBECONFIG={{kubeconfig_path}} kubectl -n suchi get pods,svc,ingress,pvc
+
+# Tail the suchi server logs.
+suchi-logs:
+    KUBECONFIG={{kubeconfig_path}} kubectl -n suchi logs -f deploy/suchi
+
+# Only logged while no admin exists; it's a one-time credential, so treat the
+# output as a secret and use it immediately at /bootstrap.
+# Print the first-boot setup token for creating the first admin.
+suchi-setup-token:
+    KUBECONFIG={{kubeconfig_path}} kubectl -n suchi logs deploy/suchi | grep token_minted
+
+# Reports schema, filesystem, OCR binaries/languages, job health and the
+# active egress list — without printing secrets.
+# Run `suchi doctor` inside the running pod.
+suchi-doctor:
+    KUBECONFIG={{kubeconfig_path}} kubectl -n suchi exec deploy/suchi -- suchi doctor
+
+# Run any suchi CLI subcommand inside the running pod (e.g. `just suchi-cli gc`).
+suchi-cli *args:
+    KUBECONFIG={{kubeconfig_path}} kubectl -n suchi exec -it deploy/suchi -- suchi {{args}}
+
+# Break-glass access when the Cloudflare edge is down: http://localhost:8000.
+# Port-forward suchi to http://localhost:8000.
+suchi-ui:
+    KUBECONFIG={{kubeconfig_path}} kubectl -n suchi port-forward svc/suchi 8000:8000
+
+# Needs the cloudflared login cert (cloudflared tunnel login) on this machine.
+# One-time: point the public suchi hostname at the tunnel.
+suchi-dns:
+    cloudflared tunnel route dns avocado suchi.rithviknishad.dev
+
 # --- SigNoz (OpenTelemetry APM: traces + logs + metrics) ---------------------
 # ClickHouse + Zookeeper + the SigNoz query service + an OTel collector, from
 # the upstream helm chart (k8s/signoz). This is the APPLICATION observability

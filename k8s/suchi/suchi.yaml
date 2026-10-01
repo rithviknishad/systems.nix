@@ -1,0 +1,199 @@
+# suchi — self-hosted document archive (https://suchi.page) on k3s.
+#
+# Deploy:   just suchi-deploy
+# Visit:    https://suchi.rithviknishad.dev        (web app + companion app API)
+# First boot: `just suchi-setup-token`, then open /bootstrap with that token to
+#             create the first admin. The token is one-time and only logged
+#             while no admin exists.
+# In-cluster: http://suchi.suchi.svc:8000
+#
+# Architecture: ONE `suchi serve` process — no database server, cache or
+# broker. Everything it persists lives on a single PVC at /data:
+#   suchi.db (+WAL)  SQLite metadata, users, jobs, FTS index, audit log
+#   blobs/           content-addressed originals + derived files (OCR'd PDFs)
+#   backups/         built-in daily VACUUM INTO snapshots (DB only, keep 7)
+#   .decrypt-key     AES-256-GCM key sealing mailbox/LLM/PDF-password secrets
+#                    — losing it makes those sealed credentials unrecoverable
+# Based on upstream deploy/k8s/suchi.yaml, adjusted as noted inline.
+#
+# Auth is suchi's own (local accounts; OIDC can be added later), so there is
+# deliberately NO Cloudflare Access gate: the Suchi Companion mobile app and
+# API-token clients must reach the API directly, and an SSO wall would break
+# them (same reasoning as ntfy). /metrics is admin-only in-app, so it is safe
+# on the public host.
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: suchi
+---
+# --- Data (SQLite + blobs + credential key) ----------------------------------
+# local-path-retain, NOT local-path: this is the only copy of the archive, and
+# with the default Delete policy a `kubectl delete ns suchi` would destroy it
+# outright (that is exactly how CARE's data was lost on 2026-08-31 — see
+# k8s/storage/local-path-retain.yaml). With Retain the PV and its directory
+# survive the namespace and can be re-bound.
+#
+# Backups: the PV lives under /var/lib/rancher/k3s/storage on rpool/var, which
+# gets rolling ZFS snapshots. A ZFS snapshot captures suchi.db, its WAL, blobs
+# and .decrypt-key atomically — the consistent "filesystem snapshot" method
+# upstream recommends (docs.suchi.page/backup-restore). Same-pool only, so it
+# protects against mistakes, not disk loss; see docs/suchi.md.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: suchi-data
+  namespace: suchi
+spec:
+  # ReadWriteOnce only — multiple writers would break SQLite's WAL.
+  accessModes: [ReadWriteOnce]
+  storageClassName: local-path-retain
+  resources:
+    requests:
+      storage: 50Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: suchi
+  namespace: suchi
+  labels:
+    app.kubernetes.io/name: suchi
+spec:
+  # SQLite is single-writer: exactly one replica, and Recreate so a rollout
+  # never has two pods opening the same database.
+  replicas: 1
+  strategy: { type: Recreate }
+  selector:
+    matchLabels: { app.kubernetes.io/name: suchi }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: suchi }
+    spec:
+      # The image runs as 65532:65532 (upstream's k8s template says 1000, but
+      # the published image's USER is 65532). k3s's local-path provisioner
+      # creates the volume dir 0777, so the unprivileged UID can write to it
+      # (fsGroup doesn't apply to hostPath-backed volumes).
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: suchi
+          # The -full variant: same app as the standard image plus OCRmyPDF,
+          # so scanned PDFs are stored with an embedded searchable text layer
+          # (OCR_ENGINE=ocrmypdf is the image default) — the copy you download
+          # stays searchable outside suchi. Pinned by the multi-arch index
+          # digest as upstream requires for production; the tag is for humans.
+          # Upgrade procedure (migrations are one-way): docs/suchi.md.
+          image: ghcr.io/johnnybravo-xyz/suchi:v0.1.0-full@sha256:a54f812648391511584d9a8ad2366bbfcd9477239fc4afacc793ca276feb19b2
+          # ENTRYPOINT is `suchi`, CMD is `serve` — no args needed.
+          env:
+            # Must be the exact public origin: used for Secure cookies, share
+            # links and (later) OIDC callbacks. Suchi doesn't do subpaths.
+            - name: PUBLIC_URL
+              value: "https://suchi.rithviknishad.dev"
+            - name: DATA_DIR
+              value: /data
+            - name: LISTEN_ADDR
+              value: ":8000"
+            # Cloudflare's free plan caps request bodies at ~100 MB, so anything
+            # bigger dies at the edge with an opaque 413 anyway. Match it here
+            # so oversize uploads fail with suchi's own error instead.
+            - name: BODY_LIMIT
+              value: "100M"
+            # Traefik is the direct TCP peer (pod CIDR); trust it to supply
+            # X-Forwarded-For for the login/share-link rate limiters. Same CIDRs
+            # as ntfy. Caveat: Traefik itself isn't configured to trust
+            # cloudflared's XFF yet, so clients may still collapse onto one IP —
+            # see docs/suchi.md.
+            - name: TRUSTED_PROXY_CIDRS
+              value: "10.42.0.0/16,10.43.0.0/16"
+            # OCR_LANGUAGES is deliberately NOT set: the default is `eng`, and
+            # leaving it unpinned lets Archive configuration change it live.
+            # Other languages also need their tesseract packs baked into a
+            # derived image (docs.suchi.page/formats#additional-ocr-languages).
+            #
+            # No LLM_* yet: model assistance is off (zero egress). Planned:
+            # point LLM_ENDPOINT_URL at an in-cluster Ollama later.
+          ports:
+            - name: http
+              containerPort: 8000
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: tmp
+              mountPath: /tmp
+          # /readyz also checks the database + schema; /healthz is process-only,
+          # so a slow DB never gets the pod killed, just taken out of rotation.
+          readinessProbe:
+            httpGet: { path: /readyz, port: http }
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 30
+            periodSeconds: 30
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          # OCRmyPDF (tesseract + ghostscript) is the hungry part: a big scan
+          # can spike well past steady-state. Capped below the box's 4C/8T so
+          # an OCR backlog can't starve the other workloads.
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "2000m"
+              memory: "2Gi"
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: suchi-data }
+        # OCR scratch space. Disk-backed (not tmpfs) so large scans don't eat
+        # RAM; size-capped so a runaway job gets the pod evicted rather than
+        # filling rpool.
+        - name: tmp
+          emptyDir:
+            sizeLimit: 5Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: suchi
+  namespace: suchi
+  labels:
+    app.kubernetes.io/name: suchi
+spec:
+  selector: { app.kubernetes.io/name: suchi }
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http
+---
+# --- Ingress (Traefik routes by Host) ----------------------------------------
+# Public edge only (Cloudflare Tunnel -> Traefik). No suchi.avocado.local host
+# on purpose: suchi derives its Secure cookies and links from PUBLIC_URL
+# (https), so a second, plain-http origin would at best half-work for login.
+# For break-glass access when the edge is down, use `just suchi-ui`.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: suchi
+  namespace: suchi
+spec:
+  rules:
+    - host: suchi.rithviknishad.dev
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: suchi
+                port: { number: 8000 }

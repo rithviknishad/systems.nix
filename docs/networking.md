@@ -116,6 +116,7 @@ flowchart LR
             ots[ots api]
             ntfy[ntfy]
             pookalam[ohc-pookalam]
+            suchi[suchi]
         end
     end
 
@@ -133,6 +134,7 @@ flowchart LR
     traefik -->|ots.rithviknishad.dev| ots
     traefik -->|ntfy.rithviknishad.dev| ntfy
     traefik -->|ohc-pookalam.rithviknishad.dev| pookalam
+    traefik -->|suchi.rithviknishad.dev| suchi
 ```
 
 ### Public routing table
@@ -159,6 +161,7 @@ matched returns `http_status:404`.
 | `ots.rithviknishad.dev` | OTS `ots-api` (x-api-key gated) | [Terminology Server](ots.md) |
 | `ntfy.rithviknishad.dev` | ntfy `ntfy` (deny-all + user/token auth) | [ntfy](ntfy.md) |
 | `ohc-pookalam.rithviknishad.dev` | Pookalam vote `ohc-pookalam` | [Onam Pookalam Vote](ohc-pookalam.md) |
+| `suchi.rithviknishad.dev` | suchi `suchi` (own account auth) | [suchi](suchi.md) |
 
 Notes:
 
@@ -188,6 +191,10 @@ Notes:
   it is a community vote and carries only its own trust-based GitHub-username
   sign-in. It holds nothing sensitive beyond the vote tallies; see
   [Onam Pookalam Vote](ohc-pookalam.md).
+- suchi gates everything with its **own accounts** (first admin via a one-time
+  setup token; `/metrics` admin-only) and is used by the Companion mobile app
+  over its API, so it does **not** sit behind Cloudflare Access either. Create
+  the admin right after the first deploy; see [suchi](suchi.md).
 - The metrics/logs databases (VMSingle, VictoriaLogs) are **deliberately not**
   exposed through the tunnel — reach them over Tailscale.
 

@@ -350,6 +350,21 @@ ingest halves; VMAgent scrapes the collector). Apps send OTLP to
 it is not published through the tunnel. `just signoz-deploy`.
 Documented on its own [SigNoz](signoz.md) page.
 
+### suchi (document archive) — `k8s/suchi/`
+
+[suchi](https://suchi.page), a self-filing document archive (OCR, Johnny.Decimal
+filing, full-text search, mobile Companion app). Like ntfy it uses the
+**upstream image** directly — the `-full` variant (adds OCRmyPDF), pinned by
+digest. One `suchi serve` process is the whole service: **SQLite +
+content-addressed blobs + a credential key on one 50 Gi PVC**, single replica
+with `Recreate`. Like CARE's database, its data PVC sits on
+**`local-path-retain`**, so deleting the namespace can't destroy the archive.
+No secret is needed: the first admin is created with a one-time setup token
+from the logs. Public at `https://suchi.rithviknishad.dev` with its own auth
+and **no** Cloudflare Access gate (the mobile app needs direct API access);
+in-cluster at `http://suchi.suchi.svc:8000`. `just suchi-deploy`. Documented on
+its own [suchi](suchi.md) page.
+
 ## The monitoring workload
 
 The largest thing on the cluster is the observability stack under
