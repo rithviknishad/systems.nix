@@ -805,3 +805,30 @@ mailpit-secrets-rekey:
 # One-time: point the public Mailpit hostname at the tunnel.
 mailpit-dns:
     cloudflared tunnel route dns avocado mailpit.rithviknishad.dev
+
+# --- App gallery (Homepage launcher) ------------------------------------------
+# Public launcher listing every exposed app, with cluster/host stats:
+#   https://apps.rithviknishad.dev   public (tunnel, no auth by design)
+#   http://apps.avocado.local        LAN/tailnet via Traefik
+# Tiles come from `gethomepage.dev/*` annotations on each app's own Ingress, so
+# they go live with that app's deploy (e.g. `just mailpit-deploy`), not this one.
+# See docs/apps.md.
+
+# Homepage reads its config at startup: bump `checksum/config` in
+# k8s/homepage/homepage.yaml after editing the ConfigMap, or the pod won't roll.
+# Deploy/upgrade the gallery (namespace, RBAC, config, Deployment, Ingress).
+apps-deploy:
+    KUBECONFIG={{kubeconfig_path}} kubectl apply -k k8s/homepage
+
+# Show the state of the homepage namespace.
+apps-status:
+    KUBECONFIG={{kubeconfig_path}} kubectl -n homepage get pods,svc,ingress
+
+# Tail the Homepage logs (discovery/RBAC errors and widget failures land here).
+apps-logs:
+    KUBECONFIG={{kubeconfig_path}} kubectl -n homepage logs -f deploy/homepage
+
+# Needs the cloudflared login cert (cloudflared tunnel login) on this machine.
+# One-time: point the public gallery hostname at the tunnel.
+apps-dns:
+    cloudflared tunnel route dns avocado apps.rithviknishad.dev

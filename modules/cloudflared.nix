@@ -81,6 +81,13 @@ in
         # and API, so no Cloudflare Access app. Only the inbox is public; SMTP
         # can't ride this tunnel for anonymous clients. See docs/mailpit.md.
         "mailpit.rithviknishad.dev" = "http://localhost:80";
+
+        # App gallery (k8s/homepage) — a Homepage launcher listing every host
+        # above, with live cluster/host stats. Public with NO auth and NO
+        # Cloudflare Access, by the user's choice: it only links to hosts that
+        # are already public (each keeps its own gate) and the stats are
+        # homelab numbers. See docs/apps.md for exactly what it discloses.
+        "apps.rithviknishad.dev" = "http://localhost:80";
       };
     };
   };

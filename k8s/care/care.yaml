@@ -523,6 +523,20 @@ kind: Ingress
 metadata:
   name: care
   namespace: care
+  # Tile on https://apps.rithviknishad.dev (k8s/homepage, docs/apps.md). This
+  # Ingress also serves care-api.*; that tile is a static entry in the
+  # homepage ConfigMap (discovery makes one tile per Ingress). Selector `app`
+  # (label exists) = every CARE workload but not the backup/bucket Job pods,
+  # whose Completed state would otherwise show the tile as degraded.
+  annotations:
+    gethomepage.dev/enabled: "true"
+    gethomepage.dev/group: CARE
+    gethomepage.dev/weight: "10"
+    gethomepage.dev/name: CARE
+    gethomepage.dev/description: OHC hospital management (HMIS)
+    gethomepage.dev/icon: mdi-hospital-building
+    gethomepage.dev/href: https://care.rithviknishad.dev
+    gethomepage.dev/pod-selector: app
 spec:
   rules:
     - host: care.rithviknishad.dev

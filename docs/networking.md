@@ -120,6 +120,7 @@ flowchart LR
             care[care + teleicu]
             suchi[suchi]
             mailpit[mailpit]
+            apps[homepage]
         end
     end
 
@@ -133,6 +134,7 @@ flowchart LR
     traefik -->|care*.rithviknishad.dev x5| care
     traefik -->|suchi.rithviknishad.dev| suchi
     traefik -->|mailpit.rithviknishad.dev| mailpit
+    traefik -->|apps.rithviknishad.dev| apps
 ```
 
 ### Public routing table
@@ -155,6 +157,7 @@ matched returns `http_status:404`.
 | `mock-ptz-camera.rithviknishad.dev` | TeleICU `mock-ptz-camera` (mock UI, `admin`/`admin`) | [CARE](care.md) |
 | `suchi.rithviknishad.dev` | suchi `suchi` (own account auth) | [suchi](suchi.md) |
 | `mailpit.rithviknishad.dev` | Mailpit `mailpit` web inbox (own basic auth; SMTP not routed) | [Mailpit](mailpit.md) |
+| `apps.rithviknishad.dev` | Homepage `homepage` app gallery (no auth by design) | [App gallery](apps.md) |
 
 Notes:
 
@@ -175,6 +178,10 @@ Notes:
   [Mailpit](mailpit.md#exposure).
 - The metrics/logs databases (VMSingle, VictoriaLogs) are **deliberately not**
   exposed through the tunnel — reach them over Tailscale.
+- The app gallery is public with **no auth at all**. It lists every host in
+  this table (including the Access-gated ONVIF console) and shows host and
+  cluster stats. See [App gallery](apps.md#security-and-whats-public) for
+  exactly what that discloses.
 
 ### Adding a public service
 
@@ -183,6 +190,8 @@ Notes:
 2. Create the DNS route once:
    `cloudflared tunnel route dns avocado <host>.rithviknishad.dev`.
 3. Add a matching k8s `Ingress` with that `host` (Traefik does the final hop).
+4. Add `gethomepage.dev/*` annotations to that Ingress so the app gets a tile
+   on `apps.rithviknishad.dev` (see [App gallery](apps.md#adding-or-removing-a-tile)).
 
 ### Troubleshooting: Cloudflare Error 1033
 

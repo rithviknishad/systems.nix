@@ -132,6 +132,7 @@ just kubeconfig                    # once
 kubectl apply -f k8s/sample.yaml   # smoke test
 kubectl apply -k k8s/immich        # after creating k8s/immich/secret.yaml
 just mon-deploy                    # monitoring stack (infra telemetry)
+just apps-deploy                   # app gallery (apps.rithviknishad.dev)
 ```
 
 See [Kubernetes](kubernetes.md) and [Monitoring](monitoring.md) for the

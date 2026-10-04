@@ -194,6 +194,16 @@ kind: Ingress
 metadata:
   name: kite
   namespace: kite
+  # Tile on https://apps.rithviknishad.dev (k8s/homepage, docs/apps.md).
+  annotations:
+    gethomepage.dev/enabled: "true"
+    gethomepage.dev/group: Infrastructure
+    gethomepage.dev/weight: "10"
+    gethomepage.dev/name: Kite
+    gethomepage.dev/description: Kubernetes dashboard · GitHub login
+    gethomepage.dev/icon: kubernetes.svg
+    gethomepage.dev/href: https://kite.rithviknishad.dev
+    gethomepage.dev/pod-selector: app=kite
 spec:
   rules:
     # Public host (Cloudflare Tunnel -> Traefik). Kite's own GitHub OAuth is the

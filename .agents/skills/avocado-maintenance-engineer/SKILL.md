@@ -52,6 +52,7 @@ Run `just kubeconfig` once, then use `KUBECONFIG=~/.kube/avocado`.
 | Host/service metrics | `just mon-grafana` (dashboards). |
 | Logs (cluster-wide) | `just mon-logs` → VictoriaLogs UI at `/select/vmui`. |
 | NixOS service / unit | `just logs [unit]` (tails the box journal). |
+| App gallery tile missing/wrong | `curl -s -H 'Host: apps.avocado.local' http://avocado/api/services` (what Homepage discovered), then `just apps-logs`. |
 | ntfy bridge itself | `just mon-ntfy-logs`; test with `just mon-ntfy-test`. |
 | k8s manifest renders? | `kubectl kustomize k8s/<dir>` (helm: `helmfile -f ... diff`). |
 | ZFS pool health | `just ssh-root` then `zpool status` / `zfs list`. Read-only inspection is fine; **never** modify pools/datasets without confirmation. |
@@ -64,10 +65,55 @@ confirm-first action (AGENTS.md). After: `nix fmt`, `just eval`, then
 live activation. Keep the `flake.lock` bump as its own atomic change.
 
 **Add / remove a service.** Walk the "New service checklist" in `AGENTS.md`
-(Gatus probe, alerts, exposure, secrets, docs, symmetric removal). Deploy per
-the safe change loop. Removing a service means also deleting its Gatus
-endpoint (and bumping `checksum/config` in the gatus Deployment), VMRules,
-ingress, secrets, and docs — dead probes create alert noise.
+(Gatus probe, alerts, exposure, gallery tile, secrets, docs, symmetric
+removal). Deploy per the safe change loop. Removing a service means also
+deleting its Gatus endpoint (and bumping `checksum/config` in the gatus
+Deployment), VMRules, ingress, gallery tile, secrets, and docs — dead probes
+create alert noise, dead tiles make the gallery lie.
+
+**App gallery tile (every public service).** `https://apps.rithviknishad.dev`
+(Homepage, `k8s/homepage/`, deep dive in `docs/apps.md`) lists every public
+service — including Access-gated ones. It auto-discovers tiles from
+`gethomepage.dev/*` annotations on Ingresses, so a new public Ingress gets:
+- `enabled: "true"`, `name`, `description`, `icon` (`mdi-*` or a
+  dashboard-icons name), and an **explicit https `href`** — otherwise
+  Homepage builds it from the first rule's host with `http://` (our Ingresses
+  have no `tls:` block; TLS ends at Cloudflare).
+- `group`: reuse an existing one (Personal, CARE, TeleICU, Infrastructure,
+  Dev Tools) before inventing a new one.
+- `weight`: **always set it.** Discovered tiles default to `0` and static
+  ones to `(index+1)*100`, so without it ordering is arbitrary.
+- `pod-selector`: the label selector for the status/CPU/RAM badge. It must
+  exclude Job/CronJob pods (a finished Job shows the tile as down) — e.g.
+  `app` ("has the label") where Jobs lack it, or `app in (a,b)`. Use `""` for
+  no badge.
+- Optional `widget.*` annotations; anything a widget calls must be reachable
+  from the `homepage` namespace (add a NetworkPolicy like
+  `allow-homepage-to-gatus` if the target namespace is default-deny).
+
+Discovery makes **one tile per Ingress**, so extra hosts on a multi-host
+Ingress (e.g. `care-api`, `care-teleicu-devices`) need a static entry in
+`services.yaml` inside `k8s/homepage/homepage.yaml` **plus a
+`checksum/config` bump** on the homepage Deployment (it only reads config at
+startup). Static entries do NOT disappear when their Ingress is removed —
+delete them by hand. Apply the service's own Ingress with `kubectl apply -k`
+(annotations are picked up live, no homepage restart); apply gallery config
+with `just apps-deploy`. Verify via the `/api/services` curl above.
+
+Gallery troubleshooting: Traefik "no available server" + pod crash-looping
+with `Failed to initialize required config ... EROFS` → a skeleton file is
+missing from the ConfigMap (Homepage creates it lazily on e.g. the browser's
+`/api/validate`, so `curl /` won't reproduce it; note a CrashLoopBackOff pod
+still reports phase `Running` — check restarts/events, not just phase). Add
+the key and bump `checksum/config`; re-diff against the image's
+`/app/src/skeleton` on every Homepage upgrade. HTTP 400 "Host validation
+failed" → the host isn't
+in `HOMEPAGE_ALLOWED_HOSTS`; config edits not showing → missing
+`checksum/config` bump; tiles listed but page empty/skeleton → the
+`postStart` revalidate hook failed (`just apps-logs`). The
+`EROFS ... prerender cache` warning at startup is **expected** (read-only
+root; Next keeps the revalidated page in memory). Don't add the
+`prometheusmetric` widget — it would proxy arbitrary PromQL to the public.
 
 **Rotate / wire a secret.** Edit via `just secrets` (host) or
 `just mon-secrets` (monitoring). Wire into NixOS through
@@ -100,4 +146,4 @@ Present the plan and wait for an explicit go-ahead.
 - Docs updated in the same change.
 - Atomic, self-contained change; working tree clean of secrets.
 - If deployed: the box activated cleanly and the relevant Gatus/Grafana signal
-  is healthy.
+  is healthy; public services show up (correctly grouped) in the app gallery.

@@ -202,7 +202,7 @@ the [Kubernetes](kubernetes.md) page.
 ### `cloudflared.nix` — Cloudflare Tunnel
 
 Runs a named tunnel that maps public subdomains of `rithviknishad.dev`
-(`hello`, `photos`, `grafana`, `status`, …) to `http://localhost:80`
+(`hello`, `photos`, `grafana`, `status`, `apps`, …) to `http://localhost:80`
 (Traefik), with a default `http_status:404`. Credentials come from a sops
 binary secret. See [Networking](networking.md).
 

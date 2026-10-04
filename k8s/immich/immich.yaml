@@ -170,6 +170,17 @@ kind: Ingress
 metadata:
   name: immich
   namespace: immich
+  # Tile on https://apps.rithviknishad.dev (k8s/homepage, docs/apps.md).
+  # Selector `app` (label exists) = the whole Immich stack, server + ML + DB.
+  annotations:
+    gethomepage.dev/enabled: "true"
+    gethomepage.dev/group: Personal
+    gethomepage.dev/weight: "10"
+    gethomepage.dev/name: Immich
+    gethomepage.dev/description: Photos & videos
+    gethomepage.dev/icon: immich.svg
+    gethomepage.dev/href: https://photos.rithviknishad.dev
+    gethomepage.dev/pod-selector: app
 spec:
   rules:
     - host: photos.rithviknishad.dev

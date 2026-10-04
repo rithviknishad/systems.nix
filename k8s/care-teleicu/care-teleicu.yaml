@@ -474,6 +474,19 @@ kind: Ingress
 metadata:
   name: care-teleicu
   namespace: care-teleicu
+  # Tile on https://apps.rithviknishad.dev (k8s/homepage, docs/apps.md) for
+  # the gateway host. The devices + mock-camera hosts below are static tiles
+  # in the homepage ConfigMap (discovery makes one tile per Ingress), so the
+  # selector lists only the gateway's own components.
+  annotations:
+    gethomepage.dev/enabled: "true"
+    gethomepage.dev/group: TeleICU
+    gethomepage.dev/weight: "10"
+    gethomepage.dev/name: TeleICU Gateway
+    gethomepage.dev/description: Camera streams & device middleware
+    gethomepage.dev/icon: mdi-router-network
+    gethomepage.dev/href: https://care-teleicu-gateway.rithviknishad.dev
+    gethomepage.dev/pod-selector: app in (reverse-proxy,teleicu-middleware,teleicu-celery,stream-server,postgres,redis)
 spec:
   rules:
     - host: care-teleicu-gateway.rithviknishad.dev

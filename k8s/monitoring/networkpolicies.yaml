@@ -95,3 +95,29 @@ spec:
     - ports:
         - protocol: TCP
           port: 9443
+---
+# 5) Allow Homepage (k8s/homepage, the public apps.rithviknishad.dev gallery)
+#    to read Gatus's status API for the up/down counts on the Status tile.
+#    Only Gatus, only its HTTP port, only from the homepage namespace. It
+#    exposes nothing new: the same API is already public on
+#    status.rithviknishad.dev. Grafana and VMSingle stay closed to it, and the
+#    prometheusmetric widget is deliberately not used (see k8s/homepage).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-homepage-to-gatus
+  namespace: monitoring
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: gatus
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: homepage
+      ports:
+        - protocol: TCP
+          port: 8080

@@ -114,6 +114,10 @@ Pages (built with the just-the-docs Jekyll theme via
 Build and deployment -> Source: GitHub Actions**; every push that touches
 `docs/` then rebuilds the site.
 
+Every publicly exposed app is listed, with live cluster stats, at
+<https://apps.rithviknishad.dev> (Homepage, `k8s/homepage/`; see
+[`docs/apps.md`](docs/apps.md)).
+
 ## Post-install checklist
 
 - [ ] SSH back in as `rithviknishad`

@@ -14,6 +14,17 @@ kind: Ingress
 metadata:
   name: grafana
   namespace: monitoring
+  # Tile on https://apps.rithviknishad.dev (k8s/homepage, docs/apps.md).
+  # href is set explicitly: Homepage would derive http://<first host>, which
+  # here is the LAN name.
+  annotations:
+    gethomepage.dev/enabled: "true"
+    gethomepage.dev/group: Infrastructure
+    gethomepage.dev/weight: "20"
+    gethomepage.dev/name: Grafana
+    gethomepage.dev/description: Metrics & logs
+    gethomepage.dev/icon: grafana.svg
+    gethomepage.dev/href: https://grafana.rithviknishad.dev
 spec:
   rules:
     - host: grafana.avocado.local

@@ -104,6 +104,17 @@ kind: Ingress
 metadata:
   name: onvif-console
   namespace: onvif-console
+  # Tile on https://apps.rithviknishad.dev (k8s/homepage, docs/apps.md).
+  # Listing it publicly is fine: Cloudflare Access still gates the click.
+  annotations:
+    gethomepage.dev/enabled: "true"
+    gethomepage.dev/group: TeleICU
+    gethomepage.dev/weight: "40"
+    gethomepage.dev/name: ONVIF Console
+    gethomepage.dev/description: Camera testing · Cloudflare Access
+    gethomepage.dev/icon: mdi-video-wireless
+    gethomepage.dev/href: https://onvif-console.rithviknishad.dev
+    gethomepage.dev/pod-selector: app=onvif-console
 spec:
   rules:
     - host: onvif-console.rithviknishad.dev

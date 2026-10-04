@@ -1,0 +1,374 @@
+# Homepage — public app launcher / gallery for avocado on k3s.
+#
+# Homepage (https://gethomepage.dev) renders one tile per publicly exposed app,
+# grouped, with live pod status and cluster/host stats on top. Tiles are mostly
+# NOT listed here: Homepage discovers them from `gethomepage.dev/*` annotations
+# on each app's own Ingress, so a tile lives next to the Ingress it describes
+# and disappears with it. Only secondary hosts of multi-host Ingresses are
+# static entries in services.yaml below, because discovery makes exactly one
+# tile per Ingress.
+#
+# Deploy:   just apps-deploy        (kubectl apply -k k8s/homepage)
+# Public:   https://apps.rithviknishad.dev   Cloudflare tunnel, NO Access gate
+# LAN:      http://apps.avocado.local        Traefik by Host header
+# See docs/apps.md.
+#
+# NO AUTH, BY DESIGN (user's call, 2026-10): it lists hosts that are already
+# public, and the stats are homelab numbers the user is happy to show. What it
+# discloses to anyone:
+#   - every public hostname, INCLUDING the Access-gated one (onvif-console).
+#     The gate still applies on click; the name is just no longer obscure.
+#   - host CPU/RAM/temp/uptime/disk and cluster CPU/RAM (widgets.yaml).
+#   - pod status, counts and CPU/RAM for ANY namespace + label selector:
+#     /api/kubernetes/{status,stats}/<ns>/<app>?podSelector=... takes both from
+#     the client. That is pod-level aggregates only (no specs, env, logs or
+#     Secrets), but it does let anyone probe which namespaces exist.
+#
+# Deliberately NOT used: the `prometheusmetric` widget. Homepage's proxy
+# forwards the client-supplied PromQL `query`, which would turn VictoriaMetrics
+# (unauthenticated, kept off the tunnel on purpose) into a public query API.
+# Host stats come from the `resources` widget instead, which reads /proc and
+# /sys from inside this pod (both show the host's values on k3s).
+#
+# Homepage reads its config at startup, so bump `checksum/config` on the
+# Deployment whenever the ConfigMap changes or the pod keeps the old config.
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: homepage
+  labels:
+    # Internet-facing pod with cluster-wide read RBAC: hold it to `restricted`.
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: homepage
+  namespace: homepage
+---
+# Read-only, and only what Homepage calls: Ingress discovery (ingresses), pod
+# status (pods), the kubernetes widget (nodes + metrics.k8s.io from k3s's
+# bundled metrics-server), and namespaces. No Secrets, no configmaps, no
+# write verbs. Traefik/Gateway CRD discovery is switched off in
+# kubernetes.yaml so it needs no CRD or apiextensions access.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: homepage
+rules:
+  - apiGroups: [""]
+    resources: [namespaces, pods, nodes]
+    verbs: [get, list]
+  - apiGroups: [networking.k8s.io]
+    resources: [ingresses]
+    verbs: [get, list]
+  - apiGroups: [metrics.k8s.io]
+    resources: [nodes, pods]
+    verbs: [get, list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: homepage
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: homepage
+subjects:
+  - kind: ServiceAccount
+    name: homepage
+    namespace: homepage
+---
+# Every file Homepage expects is present: if one is missing it tries to copy a
+# skeleton into /app/config, which is read-only here, and the process EXITS
+# (crash loop -> Traefik "no available server"). It does this lazily, the
+# first time a request needs that file, so a missing one only shows up under
+# real traffic. The expected set is the image's /app/src/skeleton; re-diff it
+# on every image bump:
+#   docker run --rm --entrypoint ls <image> /app/src/skeleton
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: homepage-config
+  namespace: homepage
+data:
+  settings.yaml: |
+    title: avocado · apps
+    description: Everything running on avocado, a NixOS + k3s homelab.
+    theme: dark
+    color: slate
+    headerStyle: boxed
+    # Dots, not "Running" pills: tiles stay compact with descriptions visible.
+    statusStyle: dot
+    # Per-tile CPU/RAM from metrics-server, shown under each pod-backed tile.
+    showStats: true
+    useEqualHeights: true
+    target: _blank
+    # Upgrades go through the pinned digest below; no update nags, and no
+    # advertising the exact version to the public.
+    hideVersion: true
+    disableUpdateCheck: true
+    # /app/config is a read-only ConfigMap; logs go to the emptyDir instead.
+    logpath: /app/logs
+    # Four groups side by side, then TeleICU as a full-width row: it has the
+    # most tiles and would otherwise make one very tall column.
+    layout:
+      Personal:
+        icon: mdi-account-heart
+      CARE:
+        icon: mdi-hospital-building
+      Infrastructure:
+        icon: mdi-server
+      Dev Tools:
+        icon: mdi-tools
+      TeleICU:
+        icon: mdi-heart-pulse
+        style: row
+        columns: 4
+
+  # Static tiles. Group names must match the Ingress annotations exactly:
+  # Homepage merges static and discovered services by group name. Each entry
+  # here is a secondary host on a multi-host Ingress (care, care-teleicu) that
+  # already has its own discovered tile; splitting those Ingresses just to get
+  # a tile would risk CARE's path routing. Weights interleave with the
+  # discovered tiles' `gethomepage.dev/weight` annotations.
+  services.yaml: |
+    - CARE:
+        - CARE API:
+            href: https://care-api.rithviknishad.dev
+            description: Django API & admin
+            icon: mdi-api
+            weight: 20
+            namespace: care
+            app: care-backend
+            podSelector: app=care-backend
+    - TeleICU:
+        - TeleICU Devices:
+            href: https://care-teleicu-devices.rithviknishad.dev
+            description: Devices micro-frontend for CARE
+            icon: mdi-puzzle
+            weight: 20
+            namespace: care-teleicu
+            app: teleicu-devices-fe
+            podSelector: app=teleicu-devices-fe
+        - Mock PTZ Camera:
+            href: https://mock-ptz-camera.rithviknishad.dev
+            description: Simulated ONVIF camera (admin/admin)
+            icon: mdi-cctv
+            weight: 30
+            namespace: care-teleicu
+            app: mock-ptz-camera
+            podSelector: app=mock-ptz-camera
+
+  # `resources` is split in two only so each gets an honest label. The disk is
+  # the container's `/`, i.e. the k3s dataset on rpool, not the whole pool.
+  widgets.yaml: |
+    - greeting:
+        text_size: xl
+        text: 🥑 avocado
+    - kubernetes:
+        cluster:
+          show: true
+          cpu: true
+          memory: true
+          showLabel: true
+          label: k3s
+        nodes:
+          show: true
+          cpu: true
+          memory: true
+          showLabel: true
+    - resources:
+        label: host
+        cpu: true
+        memory: true
+        cputemp: true
+        tempmin: 30
+        tempmax: 100
+        units: metric
+        uptime: true
+    - resources:
+        label: k3s storage
+        disk: /
+    - datetime:
+        text_size: l
+        format:
+          dateStyle: medium
+          timeStyle: short
+          hourCycle: h23
+
+  bookmarks.yaml: |
+    - About:
+        - systems.nix:
+            - icon: github.svg
+              href: https://github.com/rithviknishad/systems.nix
+              description: The config behind all of this
+        - Docs:
+            - icon: mdi-book-open-variant
+              href: https://rithviknishad.github.io/systems.nix/
+              description: How avocado is built
+        - rithviknishad.dev:
+            - icon: mdi-web
+              href: https://rithviknishad.dev
+              description: Personal site
+
+  # Ingress-annotation discovery only. Traefik IngressRoute and Gateway API
+  # discovery are off: nothing here uses them, and leaving them on makes
+  # Homepage query CRDs, which the ClusterRole above deliberately can't do.
+  kubernetes.yaml: |
+    mode: cluster
+    ingress: true
+    traefik: false
+    gateway: false
+
+  # Required to exist, unused (no Docker socket on k3s, no Proxmox).
+  docker.yaml: |
+    # intentionally empty
+  proxmox.yaml: |
+    # intentionally empty
+  custom.css: ""
+  custom.js: ""
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: homepage
+  namespace: homepage
+  labels:
+    app.kubernetes.io/name: homepage
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app.kubernetes.io/name: homepage }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: homepage }
+      annotations:
+        # Bump to roll the pod when homepage-config changes (read at startup).
+        checksum/config: config-v2
+    spec:
+      serviceAccountName: homepage
+      # The image's entrypoint only chowns and drops privileges when started as
+      # root; started as 1000 it skips that and just runs the server.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: homepage
+          # Pinned by multi-arch index digest; the tag is for humans.
+          image: ghcr.io/gethomepage/homepage:v2.4.0@sha256:643bd0be730d40f69d58028a55d1a896739333e8815786df42bc97f109ecbe61
+          env:
+            - name: MY_POD_IP
+              valueFrom:
+                fieldRef: { fieldPath: status.podIP }
+            # Homepage rejects any request whose Host isn't listed (HTTP 400
+            # "host validation failed"). The pod IP entry is for kubelet
+            # probes, which send Host: <podIP>:3000. Add any new hostname here
+            # as well as to the Ingress.
+            - name: HOMEPAGE_ALLOWED_HOSTS
+              value: apps.rithviknishad.dev,apps.avocado.local,$(MY_POD_IP):3000
+          ports:
+            - name: http
+              containerPort: 3000
+          # The index page is prerendered at IMAGE BUILD time with Homepage's
+          # skeleton config and never revalidates on a timer. Returning
+          # browsers trigger /api/revalidate themselves (their stored config
+          # hash changes every start), but a first-time visitor would get the
+          # default title/theme/layout until someone did. Regenerate it once
+          # as soon as the server answers. Next keeps the result in memory —
+          # it logs an EROFS warning trying to persist it to the read-only
+          # root, which is harmless. Never fails the pod: worst case is the
+          # cosmetic default render.
+          lifecycle:
+            postStart:
+              exec:
+                command:
+                  - sh
+                  - -c
+                  - >-
+                    timeout 60 sh -c 'until wget -q -Y off -O /dev/null
+                    "http://$MY_POD_IP:3000/api/revalidate"; do sleep 1; done'
+                    || true
+          readinessProbe:
+            httpGet: { path: /api/healthcheck, port: http }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /api/healthcheck, port: http }
+            initialDelaySeconds: 20
+            periodSeconds: 30
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+          resources:
+            requests: { cpu: "20m", memory: "128Mi" }
+            limits: { cpu: "500m", memory: "512Mi" }
+          volumeMounts:
+            - name: config
+              mountPath: /app/config
+              readOnly: true
+            - name: logs
+              mountPath: /app/logs
+            # Next.js image/fetch cache; the only other path it writes.
+            - name: cache
+              mountPath: /app/.next/cache
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: config
+          configMap: { name: homepage-config }
+        - name: logs
+          emptyDir: { sizeLimit: 64Mi }
+        - name: cache
+          emptyDir: { sizeLimit: 256Mi }
+        - name: tmp
+          emptyDir: { sizeLimit: 64Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: homepage
+  namespace: homepage
+  labels:
+    app.kubernetes.io/name: homepage
+spec:
+  selector: { app.kubernetes.io/name: homepage }
+  ports:
+    - name: http
+      port: 3000
+      targetPort: http
+---
+# Public via the Cloudflare tunnel (modules/cloudflared.nix), TLS at the edge,
+# no Cloudflare Access by choice. Deliberately carries NO gethomepage.dev
+# annotations: the gallery doesn't list itself.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: homepage
+  namespace: homepage
+spec:
+  rules:
+    - host: apps.rithviknishad.dev
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: homepage
+                port: { number: 3000 }
+    - host: apps.avocado.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: homepage
+                port: { number: 3000 }

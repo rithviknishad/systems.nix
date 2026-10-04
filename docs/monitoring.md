@@ -273,7 +273,7 @@ group (`ui.default-sort-by: group`):
 | Group | Endpoints | "Up" means | ntfy topic |
 |---|---|---|---|
 | `internal` | Grafana / VMSingle / VictoriaLogs `/health`, blackbox-exporter `/-/healthy`, [suchi](suchi.md) `/readyz`, [Mailpit](mailpit.md) `/readyz` + SMTP TCP `:1025`, the MCP servers (Kite `/`, Settle Up `/health`) | `[STATUS] == 200` | `avocado-alerts` |
-| `public` | `rithviknishad.dev`, `photos.rithviknishad.dev` (Immich `/api/server/ping`), `kite.rithviknishad.dev` (`/healthz`), `suchi.rithviknishad.dev` (`/readyz`), `mailpit.rithviknishad.dev` (`/readyz`) | 200 + body + TLS-expiry | `avocado-alerts` |
+| `public` | `rithviknishad.dev`, `photos.rithviknishad.dev` (Immich `/api/server/ping`), `kite.rithviknishad.dev` (`/healthz`), `suchi.rithviknishad.dev` (`/readyz`), `mailpit.rithviknishad.dev` (`/readyz`), `apps.rithviknishad.dev` ([app gallery](apps.md) `/api/healthcheck`) | 200 + body + TLS-expiry | `avocado-alerts` |
 | `ohcnetwork/care` | CARE public edges (`care-api /ping/`, SPA, `/api/abdm/health`, ABDM MFE `remoteEntry.js`, gateway `/`, devices MFE `/health`) + in-cluster (VersityGW, middleware, RTSPtoWeb) | 200 (+ TLS-expiry on public) | `avocado-alerts` |
 | `ohcnetwork/teleicu/cameras` | Mock PTZ camera (in-cluster + public edge) and the physical ONVIF cameras (`matrix-cctv`, `prama-cctv`, `cpplus-cctv`) as raw TCP connects to RTSP `:554` | mock: reachable + non-5xx; physical: `[CONNECTED] == true` | `avocado-alerts` |
 | `ABDM-SBX` | ABDM **sandbox**: NHPR (`/v4/`) / ABHA / HIECM | reachable + non-5xx | `avocado-abdm` (prio 4) |
@@ -313,8 +313,11 @@ Two independent pipelines push to ntfy across two topics:
 
 `networkpolicies.yaml` applies **default-deny ingress** to the namespace, then a
 minimal allow-list: all intra-namespace traffic, the ingress controller
-(Traefik in `kube-system`) → Grafana/Gatus, and the kube-apiserver → the VM
-operator's validating webhook on `:9443`. Egress is left open so scraping and
+(Traefik in `kube-system`) → Grafana/Gatus, the kube-apiserver → the VM
+operator's validating webhook on `:9443`, and the [app gallery](apps.md)
+(`homepage` namespace) → Gatus `:8080` for the Status tile's up/down widget.
+That Gatus API is already public on `status.rithviknishad.dev`; nothing else in
+the namespace is opened to the gallery. Egress is left open so scraping and
 ntfy/Gatus outbound calls keep working. (k3s enforces NetworkPolicy via
 kube-router, so these take effect.)
 

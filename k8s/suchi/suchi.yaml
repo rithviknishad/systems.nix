@@ -186,6 +186,15 @@ kind: Ingress
 metadata:
   name: suchi
   namespace: suchi
+  # Tile on https://apps.rithviknishad.dev (k8s/homepage, docs/apps.md).
+  annotations:
+    gethomepage.dev/enabled: "true"
+    gethomepage.dev/group: Personal
+    gethomepage.dev/weight: "20"
+    gethomepage.dev/name: suchi
+    gethomepage.dev/description: Document archive
+    gethomepage.dev/icon: mdi-file-document-multiple
+    gethomepage.dev/href: https://suchi.rithviknishad.dev
 spec:
   rules:
     - host: suchi.rithviknishad.dev

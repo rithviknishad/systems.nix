@@ -48,7 +48,9 @@ PersistentVolumes out of the host filesystem under `/var` — i.e. on the ZFS
 Traefik is the single ingress controller. Both the [Cloudflare
 Tunnel](networking.md#cloudflare-tunnel-public-access) and Tailnet access funnel
 to Traefik on `:80`, which routes by `Host` header. Each workload just declares
-an `Ingress` with its public host.
+an `Ingress` with its public host. Public Ingresses also carry
+`gethomepage.dev/*` annotations, which put a tile for the app on the
+[app gallery](apps.md).
 
 ## Workloads
 
@@ -240,6 +242,16 @@ LAN. The inbox is also **public** at `https://mailpit.rithviknishad.dev`
 basic-auth credential. SMTP is never public. Both password files come from
 `secrets/mailpit.enc.yaml` (`just mailpit-deploy`). Documented on its own
 [Mailpit](mailpit.md) page.
+
+### App gallery (Homepage) — `k8s/homepage/`
+
+[Homepage](https://gethomepage.dev) at `https://apps.rithviknishad.dev`: a
+public launcher with one tile per public app, grouped (Personal, CARE,
+Infrastructure, Dev Tools, TeleICU), plus live cluster and host stats. Tiles
+are discovered from `gethomepage.dev/*` annotations on each app's Ingress,
+using a read-only ClusterRole and k3s's bundled metrics-server. Stateless, with
+no auth by design. `just apps-deploy`. Documented on its own
+[App gallery](apps.md) page, including exactly what it makes public.
 
 ## The monitoring workload
 

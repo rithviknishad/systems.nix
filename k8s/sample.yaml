@@ -44,6 +44,16 @@ apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: hello
+  # Tile on https://apps.rithviknishad.dev (k8s/homepage, docs/apps.md).
+  annotations:
+    gethomepage.dev/enabled: "true"
+    gethomepage.dev/group: Dev Tools
+    gethomepage.dev/weight: "20"
+    gethomepage.dev/name: hello
+    gethomepage.dev/description: Ingress smoke test
+    gethomepage.dev/icon: nginx.svg
+    gethomepage.dev/href: https://hello.rithviknishad.dev
+    gethomepage.dev/pod-selector: app=hello
 spec:
   rules:
     - host: hello.avocado.local

@@ -349,6 +349,19 @@ data:
         alerts:
           - type: ntfy
 
+      # Public app gallery (k8s/homepage), full edge path plus cert expiry.
+      # Gatus's Host header is apps.rithviknishad.dev, which is in Homepage's
+      # HOMEPAGE_ALLOWED_HOSTS; any other Host gets a 400.
+      - name: apps.rithviknishad.dev
+        group: public
+        url: "https://apps.rithviknishad.dev/api/healthcheck"
+        interval: 5m
+        conditions:
+          - "[STATUS] == 200"
+          - "[CERTIFICATE_EXPIRATION] > 240h"
+        alerts:
+          - type: ntfy
+
       # --- mailpit (SMTP sink for the Care SaaS stack) -----------------------
 
       # Web/API readiness. /readyz sits outside Mailpit's UI basic auth, so no
@@ -527,7 +540,7 @@ spec:
         app.kubernetes.io/name: gatus
       annotations:
         # Bump to roll the pod when the config changes.
-        checksum/config: config-v35
+        checksum/config: config-v36
     spec:
       securityContext:
         runAsNonRoot: true
@@ -600,6 +613,20 @@ kind: Ingress
 metadata:
   name: gatus
   namespace: monitoring
+  # Tile on https://apps.rithviknishad.dev (k8s/homepage, docs/apps.md). The
+  # gatus widget shows up/down counts on the tile; Homepage fetches them
+  # server-side from the in-cluster Service, which networkpolicies.yaml (5)
+  # allows for the homepage namespace.
+  annotations:
+    gethomepage.dev/enabled: "true"
+    gethomepage.dev/group: Infrastructure
+    gethomepage.dev/weight: "30"
+    gethomepage.dev/name: Status
+    gethomepage.dev/description: Uptime checks (Gatus)
+    gethomepage.dev/icon: gatus.svg
+    gethomepage.dev/href: https://status.rithviknishad.dev
+    gethomepage.dev/widget.type: gatus
+    gethomepage.dev/widget.url: http://gatus.monitoring.svc:8080
 spec:
   rules:
     - host: status.avocado.local

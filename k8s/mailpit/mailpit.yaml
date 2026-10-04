@@ -193,6 +193,15 @@ kind: Ingress
 metadata:
   name: mailpit
   namespace: mailpit
+  # Tile on https://apps.rithviknishad.dev (k8s/homepage, docs/apps.md).
+  annotations:
+    gethomepage.dev/enabled: "true"
+    gethomepage.dev/group: Dev Tools
+    gethomepage.dev/weight: "10"
+    gethomepage.dev/name: Mailpit
+    gethomepage.dev/description: Test-mail inbox
+    gethomepage.dev/icon: mailpit.svg
+    gethomepage.dev/href: https://mailpit.rithviknishad.dev
 spec:
   rules:
     - host: mailpit.rithviknishad.dev

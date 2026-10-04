@@ -21,7 +21,7 @@ Two layers appear throughout:
 > read it as one concrete example before adapting — e.g. `k8s/care/`,
 > `k8s/care-teleicu/`, `docs/care.md`, and any `care-*` automation. Treat its
 > specific tooling (kustomize, sops, k3s image import, Gatus, cloudflared,
-> `just` recipes) as *that* environment's choices, not requirements. Any repo
+> Homepage, `just` recipes) as *that* environment's choices, not requirements. Any repo
 > `AGENTS.md` / maintenance skill still governs there (docs in sync, atomic
 > changes, ask before live/destructive actions, never print secrets).
 
@@ -214,6 +214,23 @@ UptimeRobot, a cloud check, …). Good signals:
 Probe in-cluster-only components via their internal service address. If the
 repo has an existing monitoring config, extend it (and follow its refresh
 ritual, e.g. bumping a config checksum) rather than inventing a parallel one.
+
+**App launcher / gallery (if the target has one).** If the environment runs a
+service dashboard (Homepage, Heimdall, a Backstage catalog, …), list the
+user-facing CARE hosts there too, in the same change as exposing them: the
+SPA, the API (admin), and — if TeleICU — the gateway, devices MFE, and mock
+devices. Group them (e.g. `CARE` and `TeleICU`), link each to its public
+https URL, and if the dashboard shows pod status, scope the selector to the
+long-running pods (exclude migration/bucket Jobs and backup CronJobs, or a
+completed Job reads as "down"). Ask before listing anything that is
+deliberately unlisted or VPN-only.
+
+> On avocado this is Homepage at `apps.rithviknishad.dev` (see
+> `docs/apps.md`). Tiles come from `gethomepage.dev/*` annotations on the
+> `care` and `care-teleicu` Ingresses; their second hosts (`care-api`,
+> `care-teleicu-devices`) are static entries in `services.yaml` in
+> `k8s/homepage/homepage.yaml` (bump its `checksum/config`). The
+> maintenance skill has the annotation rules.
 
 ## Step 6 — Seed data (ask demo vs production — Step 0)
 
@@ -425,6 +442,8 @@ accounts).
 - Every resolved public endpoint returns its expected code (SPA 200, API
   `/ping/` OK, gateway 200, MFE `/health`, object storage health 200).
 - Monitoring shows the CARE endpoints healthy.
+- If the target has an app gallery/launcher, the CARE (and TeleICU) tiles
+  appear there with working links.
 - A backup run produces a restorable dump.
 - If deployed from a repo: docs/config updated in sync; working tree clean of
   secrets and build scratch.

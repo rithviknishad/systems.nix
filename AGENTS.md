@@ -67,11 +67,15 @@ about any item you skip:
    ones in `k8s/monitoring/`.
 3. **Ingress/exposure.** Local (`*.avocado.local`), Tailscale, or public via
    cloudflared — be deliberate; public exposure needs user confirmation.
+   Public services also get `gethomepage.dev/*` annotations on their Ingress
+   (always with an explicit https `href`) so they show up on the app gallery
+   at `apps.rithviknishad.dev` — see `docs/apps.md`.
 4. **Secrets** via sops (see below), never inline.
 5. **Docs** — golden rule #1; usually `docs/kubernetes.md` or a new page.
 6. Removing a service? Remove its Gatus endpoint, alerts, ingress, secrets,
-   and docs too — dead probes cause alert noise, which erodes trust in the
-   ntfy topic.
+   gallery tile (static `services.yaml` entries in `k8s/homepage` don't go
+   away with the Ingress), and docs too — dead probes cause alert noise,
+   which erodes trust in the ntfy topic.
 
 ## Validation (before finishing a change)
 
@@ -113,8 +117,10 @@ about any item you skip:
 
 ## docs/ specifics
 
-- Pages: architecture, deployment, home-manager, kubernetes, monitoring,
-  networking, nix-modules, secrets, storage. Add new pages with the
+- Pages: apps (the public app gallery), architecture, deployment,
+  home-manager, kubernetes, monitoring, networking, nix-modules, secrets,
+  storage, plus one page per bigger service (care, kite, mailpit, suchi, ...).
+  Add new pages with the
   just-the-docs front matter used by existing ones (`nav_order` etc.).
 - `README.md` is the quick-start; `docs/` is the deep dive. Big-picture
   changes usually touch both.
