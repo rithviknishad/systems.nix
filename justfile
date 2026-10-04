@@ -757,3 +757,51 @@ suchi-ui:
 # One-time: point the public suchi hostname at the tunnel.
 suchi-dns:
     cloudflared tunnel route dns avocado suchi.rithviknishad.dev
+
+# --- Mailpit (Mailtrap-style SMTP sink + web inbox) ---------------------------
+# Catches all mail sent to it; nothing is delivered for real. Dev/staging mail
+# server for the Care SaaS (csaas-*) stack. SMTP needs auth; the inbox has its
+# own separate basic-auth credential. Both live in secrets/mailpit.enc.yaml.
+#   mailpit.mailpit.svc.cluster.local:1025   SMTP, in-cluster
+#   avocado:1025                             SMTP, tailnet (+ LAN)
+#   https://mailpit.rithviknishad.dev        web inbox, public
+#   http://avocado:8025                      web inbox, tailnet (+ LAN)
+# See docs/mailpit.md.
+
+# Applies the kustomize manifests, then pipes the sops-encrypted auth Secret
+# straight into kubectl (plaintext never touches disk), then restarts the pod
+# because Mailpit only reads its password files at startup.
+# Deploy/upgrade Mailpit (manifests + sops auth secret + restart).
+mailpit-deploy:
+    KUBECONFIG={{kubeconfig_path}} kubectl apply -k k8s/mailpit
+    sops --decrypt secrets/mailpit.enc.yaml \
+        | KUBECONFIG={{kubeconfig_path}} kubectl apply -f -
+    KUBECONFIG={{kubeconfig_path}} kubectl -n mailpit rollout restart deploy/mailpit
+
+# Show the state of the mailpit namespace.
+mailpit-status:
+    KUBECONFIG={{kubeconfig_path}} kubectl -n mailpit get pods,svc,ingress,pvc
+
+# Tail the Mailpit logs.
+mailpit-logs:
+    KUBECONFIG={{kubeconfig_path}} kubectl -n mailpit logs -f deploy/mailpit
+
+# Log in with the `ui-auth` credential from secrets/mailpit.enc.yaml.
+# Port-forward the Mailpit inbox to http://localhost:8025.
+mailpit-ui:
+    KUBECONFIG={{kubeconfig_path}} kubectl -n mailpit port-forward svc/mailpit 8025:8025
+
+# Redeploy after, and update any app holding the SMTP password (incl.
+# ~/csaas-bootstrap/mailtrap-smtp.env).
+# Edit the sops-encrypted Mailpit auth secret (SMTP + web UI password files).
+mailpit-secrets:
+    sops secrets/mailpit.enc.yaml
+
+# Re-encrypt the Mailpit secret after changing recipients in .sops.yaml.
+mailpit-secrets-rekey:
+    sops updatekeys secrets/mailpit.enc.yaml
+
+# Needs the cloudflared login cert (cloudflared tunnel login) on this machine.
+# One-time: point the public Mailpit hostname at the tunnel.
+mailpit-dns:
+    cloudflared tunnel route dns avocado mailpit.rithviknishad.dev

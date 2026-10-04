@@ -28,6 +28,14 @@ each module opens only the ports it needs:
 Tailscale adds `tailscale0` as a **trusted interface** and sets reverse-path
 filtering to `loose`, so tailnet traffic bypasses these rules.
 
+{: .note }
+> **k3s LoadBalancer ports bypass this table.** klipper ServiceLB publishes a
+> `type: LoadBalancer` Service as hostPorts. The CNI DNATs those before the
+> NixOS INPUT chain, so they are reachable on the LAN and tailnet without an
+> `allowedTCPPorts` entry. Current ones: Traefik **80/443** and
+> [Mailpit](mailpit.md) **1025** (SMTP) / **8025** (inbox). The box sits
+> behind NAT, so none of these reach the internet directly.
+
 ## mDNS (`avocado.local`)
 
 `modules/avahi.nix` runs an Avahi responder that publishes the host's addresses
@@ -111,6 +119,7 @@ flowchart LR
             kite[kite]
             care[care + teleicu]
             suchi[suchi]
+            mailpit[mailpit]
         end
     end
 
@@ -123,6 +132,7 @@ flowchart LR
     traefik -->|kite.rithviknishad.dev| kite
     traefik -->|care*.rithviknishad.dev x5| care
     traefik -->|suchi.rithviknishad.dev| suchi
+    traefik -->|mailpit.rithviknishad.dev| mailpit
 ```
 
 ### Public routing table
@@ -144,6 +154,7 @@ matched returns `http_status:404`.
 | `care-teleicu-devices.rithviknishad.dev` | TeleICU `teleicu-devices-fe` | [CARE](care.md) |
 | `mock-ptz-camera.rithviknishad.dev` | TeleICU `mock-ptz-camera` (mock UI, `admin`/`admin`) | [CARE](care.md) |
 | `suchi.rithviknishad.dev` | suchi `suchi` (own account auth) | [suchi](suchi.md) |
+| `mailpit.rithviknishad.dev` | Mailpit `mailpit` web inbox (own basic auth; SMTP not routed) | [Mailpit](mailpit.md) |
 
 Notes:
 
@@ -158,6 +169,10 @@ Notes:
   setup token; `/metrics` admin-only) and is used by the Companion mobile app
   over its API, so it does **not** sit behind Cloudflare Access either. Create
   the admin right after the first deploy; see [suchi](suchi.md).
+- Mailpit's inbox is public with **only its own basic auth** (no Cloudflare
+  Access) because it holds test mail only. Its SMTP port cannot ride the
+  tunnel; it is reachable on the tailnet/LAN via klipper. See
+  [Mailpit](mailpit.md#exposure).
 - The metrics/logs databases (VMSingle, VictoriaLogs) are **deliberately not**
   exposed through the tunnel — reach them over Tailscale.
 

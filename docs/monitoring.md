@@ -272,8 +272,8 @@ group (`ui.default-sort-by: group`):
 
 | Group | Endpoints | "Up" means | ntfy topic |
 |---|---|---|---|
-| `internal` | Grafana / VMSingle / VictoriaLogs `/health`, blackbox-exporter `/-/healthy`, [suchi](suchi.md) `/readyz`, the MCP servers (Kite `/`, Settle Up `/health`) | `[STATUS] == 200` | `avocado-alerts` |
-| `public` | `rithviknishad.dev`, `photos.rithviknishad.dev` (Immich `/api/server/ping`), `kite.rithviknishad.dev` (`/healthz`), `suchi.rithviknishad.dev` (`/readyz`) | 200 + body + TLS-expiry | `avocado-alerts` |
+| `internal` | Grafana / VMSingle / VictoriaLogs `/health`, blackbox-exporter `/-/healthy`, [suchi](suchi.md) `/readyz`, [Mailpit](mailpit.md) `/readyz` + SMTP TCP `:1025`, the MCP servers (Kite `/`, Settle Up `/health`) | `[STATUS] == 200` | `avocado-alerts` |
+| `public` | `rithviknishad.dev`, `photos.rithviknishad.dev` (Immich `/api/server/ping`), `kite.rithviknishad.dev` (`/healthz`), `suchi.rithviknishad.dev` (`/readyz`), `mailpit.rithviknishad.dev` (`/readyz`) | 200 + body + TLS-expiry | `avocado-alerts` |
 | `ohcnetwork/care` | CARE public edges (`care-api /ping/`, SPA, `/api/abdm/health`, ABDM MFE `remoteEntry.js`, gateway `/`, devices MFE `/health`) + in-cluster (VersityGW, middleware, RTSPtoWeb) | 200 (+ TLS-expiry on public) | `avocado-alerts` |
 | `ohcnetwork/teleicu/cameras` | Mock PTZ camera (in-cluster + public edge) and the physical ONVIF cameras (`matrix-cctv`, `prama-cctv`, `cpplus-cctv`) as raw TCP connects to RTSP `:554` | mock: reachable + non-5xx; physical: `[CONNECTED] == true` | `avocado-alerts` |
 | `ABDM-SBX` | ABDM **sandbox**: NHPR (`/v4/`) / ABHA / HIECM | reachable + non-5xx | `avocado-abdm` (prio 4) |

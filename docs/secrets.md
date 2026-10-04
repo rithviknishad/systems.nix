@@ -39,6 +39,7 @@ you) holds a key that can open them.
 | `secrets/care-teleicu.enc.yaml` | admin + avocado | TeleICU gateway k8s Secret: Django key, gateway JWKS, Postgres + S3 credentials |
 | `secrets/kite.enc.yaml` | admin + avocado | Kite k8s Secret: JWT + encrypt keys, GitHub OAuth app id/secret, break-glass password |
 | `settle-up-mcp.enc.yaml` | admin + avocado | Settle Up MCP k8s Secret: account email + password, live Firebase Web API key, MCP bearer token |
+| `secrets/mailpit.enc.yaml` | admin + avocado | Mailpit k8s Secret: SMTP (`smtp-auth`) and web-inbox (`ui-auth`) password files |
 
 ## How the box consumes secrets
 

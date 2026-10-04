@@ -226,6 +226,21 @@ and **no** Cloudflare Access gate (the mobile app needs direct API access);
 in-cluster at `http://suchi.suchi.svc:8000`. `just suchi-deploy`. Documented on
 its own [suchi](suchi.md) page.
 
+### Mailpit (SMTP sink) — `k8s/mailpit/`
+
+[Mailpit](https://mailpit.axllent.org), a Mailtrap-style mail catcher: it
+accepts all SMTP and shows it in a web inbox, delivering nothing for real. It is
+the dev/staging mail server for the Care SaaS (`csaas-*`) stack. Upstream image
+pinned by digest, single replica on a small disposable `local-path` PVC. SMTP
+(`:1025`, AUTH-required, plaintext) and the inbox (`:8025`) sit on a klipper
+**LoadBalancer**, so they are reachable in-cluster
+(`mailpit.mailpit.svc.cluster.local`), on the tailnet (`avocado`) and on the
+LAN. The inbox is also **public** at `https://mailpit.rithviknishad.dev`
+(tunnel, no Access gate) and at `mail.avocado.local`, always behind a separate
+basic-auth credential. SMTP is never public. Both password files come from
+`secrets/mailpit.enc.yaml` (`just mailpit-deploy`). Documented on its own
+[Mailpit](mailpit.md) page.
+
 ## The monitoring workload
 
 The largest thing on the cluster is the observability stack under

@@ -93,3 +93,12 @@ creation_rules:
       - age:
           - *admin
           - *avocado
+
+  # Mailpit (SMTP sink) k8s Secret — the SMTP and web-UI password files. A
+  # full k8s Secret manifest, decrypted at deploy time on the admin machine
+  # (`just mailpit-deploy`); encrypted to avocado too for consistency.
+  - path_regex: secrets/mailpit\.enc\.yaml$
+    key_groups:
+      - age:
+          - *admin
+          - *avocado

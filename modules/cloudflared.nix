@@ -75,6 +75,12 @@ in
         # so NO Cloudflare Access gate — an SSO wall would break the app's API
         # calls. See docs/suchi.md.
         "suchi.rithviknishad.dev" = "http://localhost:80";
+
+        # Mailpit test-mail inbox (k8s/mailpit) — public by choice: it only
+        # ever holds TEST mail. Mailpit's own basic auth (ui-auth) gates the UI
+        # and API, so no Cloudflare Access app. Only the inbox is public; SMTP
+        # can't ride this tunnel for anonymous clients. See docs/mailpit.md.
+        "mailpit.rithviknishad.dev" = "http://localhost:80";
       };
     };
   };

@@ -1,0 +1,215 @@
+# Mailpit — self-hosted, Mailtrap-style SMTP sink + web inbox on k3s.
+#
+# Mailpit (https://mailpit.axllent.org, sponsored by Mailtrap) catches every
+# message sent to it and shows it in a web UI — nothing is ever delivered to a
+# real mailbox. It is the dev/staging mail server for the Care SaaS (csaas-*)
+# stack: point an app's SMTP settings at it and read the mail in the inbox.
+#
+# Deploy:   just mailpit-deploy   (kubectl apply -k + sops auth secret + roll)
+# SMTP:     mailpit.mailpit.svc.cluster.local:1025   in-cluster
+#           avocado:1025 (tailnet) / 192.168.165.202:1025 (LAN)   auth required
+# Inbox:    https://mailpit.rithviknishad.dev   public (Cloudflare tunnel)
+#           http://avocado:8025                  tailnet (also LAN)
+#           http://mail.avocado.local            LAN/tailnet via Traefik
+#           all behind the ui-auth basic auth; or `just mailpit-ui`
+# See docs/mailpit.md.
+#
+# EXPOSURE is deliberately wide: this only ever holds TEST mail, and the user
+# chose public + tailnet reach over isolation (2026-10). Both auth layers below
+# still apply on every path. SMTP is NOT public — Cloudflare Tunnel only
+# carries HTTP for anonymous clients; raw TCP would need Spectrum (paid) or a
+# router port-forward.
+#
+# AUTH — SMTP requires a credential from the `smtp-auth` password file, and the
+# web UI/API one from the separate `ui-auth` file; both come from the
+# sops-backed `mailpit-auth` Secret (applied by `just mailpit-deploy`, not by
+# kustomize). Separate files so a leaked app SMTP credential can't also read
+# every captured message — which routinely contain password-reset and
+# verification links.
+#
+# NO TLS on SMTP, deliberately. Mailpit normally refuses AUTH without TLS;
+# MP_SMTP_AUTH_ALLOW_INSECURE lifts that. In-cluster the traffic never leaves
+# the node; over the tailnet WireGuard encrypts it; only LAN senders go over
+# the wire in clear (acceptable for throwaway test credentials). Offering
+# STARTTLS with a self-signed cert would be worse: clients that upgrade
+# opportunistically AND verify the cert (e.g. Go's net/smtp SendMail) would
+# then fail outright. Caveat: Go's smtp.PlainAuth
+# refuses to send credentials over plaintext to a non-localhost host, so a Go
+# client that insists on auth needs TLS added here first — see docs/mailpit.md.
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: mailpit
+---
+# Captured mail is disposable test data, so plain `local-path` (Delete) is
+# right here — unlike suchi/CARE there is nothing worth retaining past a
+# namespace delete. Persistent at all only so a pod roll doesn't empty the
+# inbox mid-test.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mailpit-data
+  namespace: mailpit
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mailpit
+  namespace: mailpit
+  labels:
+    app.kubernetes.io/name: mailpit
+spec:
+  # SQLite is single-writer: one replica, and Recreate so a rollout never has
+  # two pods opening the same database.
+  replicas: 1
+  strategy: { type: Recreate }
+  selector:
+    matchLabels: { app.kubernetes.io/name: mailpit }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: mailpit }
+      annotations:
+        # Bump to roll the pod when the auth Secret changes — Mailpit reads its
+        # password files only at startup. (`just mailpit-deploy` also does a
+        # rollout restart, so this is only needed for manual applies.)
+        checksum/config: config-v1
+    spec:
+      # Static Go binary; nothing in it needs root. The image defaults to root,
+      # so pin an unprivileged UID. local-path creates the volume dir 0777, so
+      # it can still write the database (fsGroup doesn't apply to hostPath).
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: mailpit
+          # Pinned by multi-arch index digest; the tag is for humans.
+          image: docker.io/axllent/mailpit:v1.31.3@sha256:ed9b00c609e77e99c79b93f1178255ebc271868920f2c69a8d166bd5634ed10d
+          env:
+            - name: MP_DATABASE
+              value: /data/mailpit.db
+            # Bounded so a chatty app (or a mail loop) can't fill rpool: oldest
+            # messages are pruned past either limit.
+            - name: MP_MAX_MESSAGES
+              value: "5000"
+            - name: MP_MAX_AGE
+              value: 30d
+            - name: MP_SMTP_AUTH_FILE
+              value: /auth/smtp-auth
+            - name: MP_UI_AUTH_FILE
+              value: /auth/ui-auth
+            - name: MP_SMTP_AUTH_ALLOW_INSECURE
+              value: "true"
+            # Pod IPs have no PTR records; rDNS just adds latency per message.
+            - name: MP_SMTP_DISABLE_RDNS
+              value: "true"
+            # No phoning home to GitHub; upgrades go through the digest above.
+            - name: MP_DISABLE_VERSION_CHECK
+              value: "true"
+            - name: MP_LABEL
+              value: avocado
+          ports:
+            - name: http
+              containerPort: 8025
+            - name: smtp
+              containerPort: 1025
+          # /readyz and /livez sit outside the UI basic auth by design, so
+          # probes (and Gatus) need no credentials.
+          readinessProbe:
+            httpGet: { path: /readyz, port: http }
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /livez, port: http }
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+          resources:
+            requests: { cpu: "10m", memory: "32Mi" }
+            limits: { cpu: "500m", memory: "256Mi" }
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: auth
+              mountPath: /auth
+              readOnly: true
+            # SQLite temp files + Go's os.TempDir with a read-only root.
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: mailpit-data }
+        - name: auth
+          secret:
+            secretName: mailpit-auth
+            defaultMode: 0440
+        - name: tmp
+          emptyDir:
+            sizeLimit: 256Mi
+---
+# LoadBalancer via k3s's klipper ServiceLB: an svclb pod binds host :1025 and
+# :8025 on EVERY node IP — tailscale0 (so `avocado:1025` works from the
+# tailnet) and the LAN NIC alike (hostPort DNAT happens before the NixOS
+# firewall's INPUT chain, same as Traefik's :80/:443). Chosen over NodePort +
+# `tailscale serve` because serve's HTTPS ports are all used up (see
+# docs/networking.md) and this needs no host deploy. The ClusterIP still
+# serves in-cluster clients as before.
+apiVersion: v1
+kind: Service
+metadata:
+  name: mailpit
+  namespace: mailpit
+  labels:
+    app.kubernetes.io/name: mailpit
+spec:
+  type: LoadBalancer
+  selector: { app.kubernetes.io/name: mailpit }
+  ports:
+    - name: smtp
+      port: 1025
+      targetPort: smtp
+    - name: http
+      port: 8025
+      targetPort: http
+---
+# Web inbox via Traefik. Public host goes through the Cloudflare tunnel
+# (modules/cloudflared.nix), TLS at the edge, NO Cloudflare Access gate —
+# Mailpit's own ui-auth basic auth is the gate (testing only, user's call).
+# The .avocado.local host is the LAN/tailnet path by Host header.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: mailpit
+  namespace: mailpit
+spec:
+  rules:
+    - host: mailpit.rithviknishad.dev
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: mailpit
+                port: { number: 8025 }
+    - host: mail.avocado.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: mailpit
+                port: { number: 8025 }

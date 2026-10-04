@@ -337,6 +337,42 @@ data:
         alerts:
           - type: ntfy
 
+      # Mailpit public inbox edge (edge -> tunnel -> Traefik -> pod), plus cert
+      # expiry. /readyz is outside the ui-auth basic auth, like the internal one.
+      - name: mailpit.rithviknishad.dev
+        group: public
+        url: "https://mailpit.rithviknishad.dev/readyz"
+        interval: 5m
+        conditions:
+          - "[STATUS] == 200"
+          - "[CERTIFICATE_EXPIRATION] > 240h"
+        alerts:
+          - type: ntfy
+
+      # --- mailpit (SMTP sink for the Care SaaS stack) -----------------------
+
+      # Web/API readiness. /readyz sits outside Mailpit's UI basic auth, so no
+      # credential lands in this ConfigMap.
+      - name: mailpit
+        group: internal
+        url: "http://mailpit.mailpit.svc:8025/readyz"
+        interval: 1m
+        conditions:
+          - "[STATUS] == 200"
+        alerts:
+          - type: ntfy
+
+      # The SMTP listener is what apps actually depend on, and it's a separate
+      # socket from the UI — a raw TCP connect proves it's accepting.
+      - name: mailpit-smtp
+        group: internal
+        url: "tcp://mailpit.mailpit.svc:1025"
+        interval: 1m
+        conditions:
+          - "[CONNECTED] == true"
+        alerts:
+          - type: ntfy
+
       # --- ohcnetwork/teleicu/cameras (own subgroup: cameras are numerous,
       # site-specific, and physically fragile — kept out of the main
       # ohcnetwork/care rollup so camera flakiness doesn't dilute it). ------
@@ -491,7 +527,7 @@ spec:
         app.kubernetes.io/name: gatus
       annotations:
         # Bump to roll the pod when the config changes.
-        checksum/config: config-v33
+        checksum/config: config-v35
     spec:
       securityContext:
         runAsNonRoot: true
