@@ -347,26 +347,13 @@ just mon-speedtest  # latest speedtest metrics (runs a test if cache expired)
 
 Three ways in, in order of preference:
 
-1. **Public tunnel (with SSO):** `https://grafana.rithviknishad.dev` — via the
-   [Cloudflare Tunnel](networking.md), optionally gated by Cloudflare Access.
+1. **Public tunnel:** `https://grafana.rithviknishad.dev` — via the
+   [Cloudflare Tunnel](networking.md). Gated only by Grafana's own login (the
+   sops-managed admin password), so keep that password strong.
 2. **Tailnet via Traefik:**
    `curl -H "Host: grafana.rithviknishad.dev" http://avocado`.
 3. **Port-forward:** `just mon-grafana` → `http://localhost:3000`.
 
-### Grafana SSO (Cloudflare Access) {#grafana-sso-cloudflare-access}
-
-To put single-sign-on in front of Grafana, create a Zero-Trust **self-hosted
-Access application** for `grafana.rithviknishad.dev`, then uncomment/fill the
-`auth.jwt` block in `values.yaml`:
-
-- `jwk_set_url: https://<TEAM>.cloudflareaccess.com/cdn-cgi/access/certs`
-- `expect_claims: '{"aud":"<ACCESS_APP_AUD>"}'`
-
-Access validates the login at the edge and injects a signed
-`Cf-Access-Jwt-Assertion` header; Grafana verifies it against Cloudflare's JWKS
-and auto-provisions the user (Viewer by default). The built-in login form stays
-as a break-glass fallback. Until Access is live, keep the sops admin password
-strong. The `README.md` in `k8s/monitoring/` has the full runbook.
 
 ## Version pinning
 

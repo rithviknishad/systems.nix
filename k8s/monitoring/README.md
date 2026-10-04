@@ -77,9 +77,10 @@ just mon-status
 
 Three ways in, in order of preference:
 
-1. **Public tunnel (with SSO):** <https://grafana.rithviknishad.dev> — served
-   through the cloudflared tunnel and, once configured, gated by Cloudflare
-   Access (see below). TLS terminates at Cloudflare's edge.
+1. **Public tunnel:** <https://grafana.rithviknishad.dev> — served through the
+   cloudflared tunnel and gated only by Grafana's own login (no Cloudflare
+   Access; keep the sops admin password strong). TLS terminates at
+   Cloudflare's edge.
 2. **Tailnet, via Traefik** (no public exposure):
    ```sh
    curl -H "Host: grafana.rithviknishad.dev" http://avocado
@@ -90,32 +91,6 @@ Three ways in, in order of preference:
    just mon-grafana   # -> http://localhost:3000  (admin / sops password)
    ```
 
-## Grafana SSO via Cloudflare Access
-
-Grafana is reachable at `grafana.rithviknishad.dev` through the tunnel. To put
-single-sign-on in front of it (so you authenticate at Cloudflare's edge instead
-of relying only on the admin login form), wire up **Cloudflare Access** + the
-commented `auth.jwt` block in `values.yaml`:
-
-1. **Zero Trust > Access > Applications > Add > Self-hosted.** Application
-   domain `grafana.rithviknishad.dev`. Add a policy that allows your email
-   (e.g. Action *Allow*, Include *Emails* → your address).
-2. From the app's **Overview**, copy the **Application Audience (AUD) tag**.
-   From **Zero Trust > Settings** note your **team domain**
-   (`<TEAM>.cloudflareaccess.com`).
-3. In `k8s/monitoring/values.yaml`, uncomment the `grafana.ini` → `auth.jwt`
-   block and fill:
-   - `jwk_set_url: https://<TEAM>.cloudflareaccess.com/cdn-cgi/access/certs`
-   - `expect_claims: '{"aud":"<ACCESS_APP_AUD>"}'`
-4. `just mon-deploy` to roll it out.
-
-Cloudflare Access validates the login at the edge and forwards a signed
-`Cf-Access-Jwt-Assertion` header; Grafana verifies it against Cloudflare's JWKS
-and auto-provisions the user (Viewer by default — promote yourself once, or set
-`users.auto_assign_org_role: Admin`). The built-in login form stays enabled as a
-break-glass fallback. Until you create the Access application, the tunnel serves
-Grafana protected only by that admin login form — so keep the sops password
-strong, or don't create the DNS route until Access is live.
 
 ## ntfy notifications
 
@@ -248,9 +223,8 @@ the provisioned *VictoriaLogs* datasource, or via `just mon-logs`
             topic goes private.
       - [x] Public access via the cloudflared tunnel
             (`grafana.rithviknishad.dev`, `status.rithviknishad.dev`).
-      - [ ] Grafana SSO — `auth.jwt` template + tunnel are in place; activate by
-            creating a Cloudflare Access app and filling the team domain + AUD
-            (see "Grafana SSO via Cloudflare Access").
+      - [x] Grafana is deliberately **not** behind Cloudflare Access — its own
+            login (sops admin password) is the only gate on the public host.
 - [x] **SMART disk health** — `smartctl`/`smartmon` textfile metrics + alerts
       (`modules/monitoring.nix` + `smart-vmrules.yaml`).
 - [x] **Internet connection** — speedtest + blackbox exporters, alerts and a

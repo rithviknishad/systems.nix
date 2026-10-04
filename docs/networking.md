@@ -159,9 +159,9 @@ matched returns `http_status:404`.
 Notes:
 
 - **TLS terminates at Cloudflare's edge** — no cert-manager on the box.
-- Grafana can additionally sit behind **Cloudflare Access** (Zero-Trust SSO);
-  the JWT wiring is templated and documented on the
-  [Monitoring](monitoring.md#grafana-sso-cloudflare-access) page.
+- Grafana is public with **only its own login** (sops-managed admin password)
+  — it is deliberately **not** behind Cloudflare Access; see
+  [Monitoring](monitoring.md#access-grafana).
 - Kite carries its **own GitHub OAuth** login (full cluster-admin console), so
   it does **not** need Cloudflare Access in front despite being
   cluster-admin; see [Kite](kite.md).

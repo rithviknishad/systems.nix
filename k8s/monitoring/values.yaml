@@ -235,39 +235,10 @@ grafana:
       reporting_enabled: false
       check_for_updates: false
       check_for_plugin_updates: false
-    # --- Grafana SSO via Cloudflare Access (JWT) --------------------------
-    # Grafana is exposed at https://grafana.rithviknishad.dev through the
-    # cloudflared tunnel (modules/cloudflared.nix). To put Cloudflare Access
-    # SSO in front of it, create a Zero Trust "self-hosted" application for
-    # that hostname, then UNCOMMENT the block below and fill the two
-    # site-specific values, and redeploy (`just mon-deploy`):
-    #
-    #   1. jwk_set_url host -> your team domain, i.e.
-    #      https://<TEAM>.cloudflareaccess.com  (Zero Trust > Settings > Custom
-    #      Pages / team domain).
-    #   2. expect_claims `aud` -> the Access application's Audience (AUD) tag
-    #      (Access > Applications > your app > Overview).
-    #
-    # Access validates the login at the edge and injects a signed
-    # Cf-Access-Jwt-Assertion header; Grafana verifies it against Cloudflare's
-    # JWKS and auto-provisions the user. The built-in login form stays enabled
-    # as a break-glass fallback (don't set disable_login_form). See
-    # README.md "Grafana SSO via Cloudflare Access" for the full runbook.
-    #
-    auth.jwt:
-      enabled: true
-      header_name: Cf-Access-Jwt-Assertion
-      email_claim: email
-      username_claim: email
-      auto_sign_up: true
-      jwk_set_url: https://<TEAM>.cloudflareaccess.com/cdn-cgi/access/certs
-      # Pin the token to THIS Access app (strongly recommended):
-      expect_claims: '{"aud":"<ACCESS_APP_AUD>"}'
-    # # New SSO users land as Viewers by default; promote yourself once, or
-    # # uncomment to make every Access-admitted user a full Admin (safe only
-    # # because Access already gates who can reach Grafana at all):
-    # users:
-    #   auto_assign_org_role: Admin
+    # No Cloudflare Access / auth.jwt in front of Grafana: it is reachable at
+    # https://grafana.rithviknishad.dev through the tunnel
+    # (modules/cloudflared.nix) gated only by its own login (admin password
+    # from the sops secret). Keep that password strong.
 
 # ===========================================================================
 # node-exporter — host metrics (CPU, memory, disk, network, ZFS).
