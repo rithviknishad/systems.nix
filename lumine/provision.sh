@@ -156,6 +156,23 @@ install -d -m 755 /var/lib/care
 # Holds the rendered env file with decrypted secrets: root only.
 install -d -m 700 /etc/care
 
+# --- backup source (avocado pulls) ----------------------------------------------
+# avocado's care-box-backup service logs in as care-backup and can only run
+# backup/backup-source.sh (a pg_dump or a read-only rsync of the uploads):
+# the key is locked to it by a forced command in a root-owned
+# authorized_keys, and sudo allows that script and nothing else. A real
+# shell (/bin/sh) because sshd runs forced commands through it; the account
+# has no password, so the key is the only way in.
+if ! id care-backup >/dev/null 2>&1; then
+  useradd --system --user-group --home-dir /var/lib/care-backup --shell /bin/sh care-backup
+  log "created user care-backup"
+fi
+install -d -m 755 /var/lib/care-backup /var/lib/care-backup/.ssh
+put "$here/backup/authorized_keys" /var/lib/care-backup/.ssh/authorized_keys 644 || true
+echo 'care-backup ALL=(root) NOPASSWD: /usr/local/lib/care-box/backup/backup-source.sh *' >"$tmp/sudoers"
+visudo -cqf "$tmp/sudoers"
+put "$tmp/sudoers" /etc/sudoers.d/care-backup 440 || true
+
 # --- postgres ----------------------------------------------------------------
 if put "$here/postgresql/care-box.conf" /etc/postgresql/17/main/conf.d/care-box.conf 644; then
   systemctl restart postgresql@17-main

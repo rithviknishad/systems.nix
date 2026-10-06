@@ -224,6 +224,14 @@ recipes). It pins lumine's SSH host key in the system-wide `known_hosts`
 (under `lumine`, its tailnet FQDN, `lumine.local` and its tailnet IP), so
 neither a recipe run nor a root service trusts it on first use.
 
+It also **pulls nightly backups** of care-box: `care-box-backup.service`
+(timer ~03:15, as the unprivileged `care-box-backup` user, sandboxed) runs
+`pg_dump` and rsyncs the uploads from lumine, using an SSH key from sops
+(`secrets/care-box-backup_ed25519`) that the Pi locks to a forced command.
+It keeps 7 days in `/var/lib/care-box-backups` and writes `care_box_backup_*`
+textfile metrics for the backup alerts. See
+[CARE in a box → Backups](care-box.md#backups).
+
 ### `monitoring.nix` — host-side metrics glue
 
 The in-cluster monitoring stack can't read per-pool ZFS health or SMART from

@@ -119,3 +119,11 @@ creation_rules:
       - age:
           - *admin
           - *avocado
+  # SSH key avocado's care-box-backup service pulls lumine's backups with
+  # (binary; modules/care-box.nix). Its public half is in
+  # lumine/backup/authorized_keys, locked to a forced command on the Pi.
+  - path_regex: secrets/care-box-backup_ed25519$
+    key_groups:
+      - age:
+          - *admin
+          - *avocado

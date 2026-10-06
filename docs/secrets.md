@@ -42,6 +42,7 @@ you) holds a key that can open them.
 | `secrets/mailpit.enc.yaml` | admin + avocado | Mailpit k8s Secret: SMTP (`smtp-auth`) and web-inbox (`ui-auth`) password files |
 | `secrets/care-box.enc.env` | admin + avocado | [CARE in a box](care-box.md) on lumine (dotenv): Django key, JWKS, VersityGW root, ABDM client id/secret, Mailpit password, `BOX_ADMIN_PASSWORD` |
 | `secrets/lumine-cloudflared.json` | admin + avocado | lumine's own tunnel credentials (binary) |
+| `secrets/care-box-backup_ed25519` | admin + avocado | SSH key avocado pulls care-box backups with (binary; locked to a forced command on the Pi) |
 
 lumine (the Pi) is deliberately **not** a recipient of its own secrets.
 avocado or the Mac decrypts them and streams the plaintext over SSH into

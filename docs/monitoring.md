@@ -146,6 +146,13 @@ From `kube_cronjob_status_last_successful_time` / `kube_job_status_failed`
 | `BackupCronJobStale` | critical | a `*-db-backup` CronJob hasn't succeeded in > 36h |
 | `BackupCronJobMissing` | warning | no successful-run series exists for `care-db-backup` for 6h |
 | `BackupJobFailed` | warning | a backup Job has a failed pod for 15m |
+| `CareBoxBackupStale` | critical | no complete [care-box](care-box.md#backups) snapshot on avocado newer than 36h |
+| `CareBoxBackupFailed` | warning | the last `care-box-backup.service` run failed |
+| `CareBoxBackupMissing` | warning | no `care_box_backup_*` metrics for 6h |
+
+The `CareBox*` rules read textfile metrics that avocado's
+`care-box-backup.service` writes after every run (`modules/care-box.nix`),
+since that backup is a systemd timer, not a CronJob.
 
 Backups fail silently by nature — nothing breaks when a dump doesn't happen,
 so you find out when you need it. The `teleicu-db-backup` CronJob silently

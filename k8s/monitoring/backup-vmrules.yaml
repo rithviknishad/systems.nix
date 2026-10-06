@@ -78,3 +78,50 @@ spec:
               Backup job {{ $labels.job_name }} in namespace
               {{ $labels.namespace }} has {{ $value }} failed pod(s). Inspect
               with `kubectl -n {{ $labels.namespace }} logs job/{{ $labels.job_name }}`.
+
+    # care-box (CARE on the Pi lumine) is backed up by a systemd timer on
+    # avocado, not a CronJob, so its outcome comes from the textfile metrics
+    # the care-box-backup service writes after every run (modules/care-box.nix).
+    - name: care-box-backup
+      rules:
+        # Nightly at ~03:15; 36h tolerates one late or skipped run.
+        - alert: CareBoxBackupStale
+          expr: |-
+            (time() - care_box_backup_last_success_timestamp_seconds) > 129600
+          for: 30m
+          labels:
+            severity: critical
+          annotations:
+            summary: "care-box has no backup newer than 36h"
+            description: >-
+              The newest complete care-box snapshot on avocado is
+              {{ $value | humanizeDuration }} old. lumine is a single SD card.
+              Check `just box-backups` and
+              `journalctl -u care-box-backup` on avocado, then `just box-backup`.
+
+        - alert: CareBoxBackupFailed
+          expr: |-
+            care_box_backup_last_run_success == 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "The last care-box backup run failed"
+            description: >-
+              care-box-backup.service on avocado failed its last run (lumine
+              unreachable, pg_dump or rsync error). Earlier snapshots are kept.
+              See `journalctl -u care-box-backup` on avocado.
+
+        # No series at all: the module isn't deployed, or node-exporter lost
+        # the textfile mount.
+        - alert: CareBoxBackupMissing
+          expr: |-
+            absent(care_box_backup_last_success_timestamp_seconds)
+          for: 6h
+          labels:
+            severity: warning
+          annotations:
+            summary: "No care-box backup metrics"
+            description: >-
+              care_box_backup_* metrics are missing. Is modules/care-box.nix
+              deployed on avocado and has care-box-backup.service ever run?

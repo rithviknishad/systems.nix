@@ -1039,6 +1039,18 @@ box-manage *args: box-sync
 box-ssh:
     ssh {{box_ssh}}
 
+# --- care-box backups: pulled to avocado nightly (modules/care-box.nix) -------
+# /var/lib/care-box-backups/<UTC stamp>/{care.dump,s3/,MANIFEST}, 7 days kept.
+
+# Same service the nightly timer runs; waits for it and prints this run's log.
+# Pull a care-box backup to avocado now.
+box-backup:
+    ssh {{NIX_SSHOPTS}} {{target}} 'systemctl start care-box-backup.service; rc=$?; journalctl --no-pager -o cat _SYSTEMD_INVOCATION_ID=$(systemctl show -p InvocationID --value care-box-backup.service); exit $rc'
+
+# List care-box's backups on avocado, their sizes and the next scheduled run.
+box-backups:
+    ssh {{NIX_SSHOPTS}} {{target}} 'cd /var/lib/care-box-backups && for d in 20*Z; do [ -d "$d" ] && echo "$d  $(grep -h -E "^(db_bytes|files|files_bytes)=" "$d/MANIFEST" | tr "\n" " ")"; done; echo "latest -> $(readlink latest)"; echo "on disk (hardlinks counted once): $(du -sh . | cut -f1)"; systemctl list-timers --no-pager care-box-backup.timer'
+
 # Run ON AVOCADO: the Vite build needs ~4 GB of RAM and lumine has 2 GB, while
 # the output is architecture-independent static files. Builds care_fe at the
 # head of `ref` with the care-box origin baked in (same .env.local as

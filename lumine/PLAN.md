@@ -525,3 +525,11 @@ zram swap (2 GB) is the safety net; consider folding beat into the worker
     seed-demo (idempotent), `box-manage` quoting, stop -> health fails ->
     start (16 s) -> health passes.
   - Pinned lumine's host key on avocado (`modules/care-box.nix`).
+- 2026-10-07: **backups** (Phase 6, revised: no on-box dumps, the SD card
+  isn't where copies should live). avocado pulls nightly with a forced-command
+  key (`lumine/backup/`, `care-backup` user on the Pi) into
+  `/var/lib/care-box-backups`: `care.dump` + `s3/` (xattrs) per snapshot,
+  `--link-dest` dailies, 7-day retention, textfile metrics +
+  `CareBox*` alerts. `just box-backup` / `box-backups`. Tested the script by
+  hand (2 runs, prune, scratch-DB restore) and the forced command's
+  refusals; the service itself runs once avocado is deployed.

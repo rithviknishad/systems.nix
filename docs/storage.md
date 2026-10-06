@@ -81,6 +81,9 @@ Mitigations baked into the system:
   these live on the *same pool*, so they protect against mistakes, not disk
   failure.
 - **Nightly `pg_dump` backups** per service, retained 14 days.
+- **care-box** (CARE on the Pi lumine) is pulled to avocado nightly into
+  `/var/lib/care-box-backups` (7 days kept), so its only off-Pi copy lives
+  here. See [CARE in a box](care-box.md#backups).
 - **Off-box backups** via `zfs send` are the intended safety net (set these up —
   see the post-install checklist in [Deployment](deployment.md)).
 - **Weekly scrubs** catch silent corruption early (`modules/zfs.nix`).

@@ -1,0 +1,7 @@
+# authorized_keys of the `care-backup` user on lumine (installed root-owned
+# by lumine/provision.sh, so the user can't change it). The only key is
+# avocado's care-box-backup puller (private half: secrets/care-box-backup_ed25519).
+# It can't get a shell or any forwarding (`restrict`), only connects from
+# avocado's tailnet IP, and whatever it asks for goes through
+# backup-source.sh, which allows a pg_dump or a read-only rsync and nothing else.
+restrict,from="100.123.72.40",command="sudo -n /usr/local/lib/care-box/backup/backup-source.sh \"$SSH_ORIGINAL_COMMAND\"" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICOXKF9dNt0Rn3g+cskTaGwFGfJUFmcNy+1BqnxytVCP care-box-backup@avocado

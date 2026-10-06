@@ -86,6 +86,7 @@ over the tailnet (passwordless sudo there):
 | `just box-provision` / `box-upgrade` | converge the base system / `apt full-upgrade` |
 | `just box-secrets` / `box-secrets-render` | edit the sops file / render it onto the box |
 | `just box-ssh` | a shell on lumine |
+| `just box-backup` / `box-backups` | pull a backup to avocado now / list the snapshots ([Backups](#backups)) |
 
 Stops and `box-offline` aren't persistent: the units are enabled, so a
 reboot brings everything back.
@@ -419,6 +420,75 @@ just box-manage abdm_register_bridge_url             # takes callbacks over from
 Switching back = the same command on avocado (`just care-manage
 abdm_register_bridge_url`). See [CARE → ABDM](care.md#abdm-care-abdm-plug)
 for per-facility setup (HFR link, HRP service registration).
+
+## Backups
+
+lumine is one SD card, so its backups live on another machine. **avocado
+pulls them nightly** (`care-box-backup.service`, timer ~03:15 + up to 10 min,
+catches up after downtime; `modules/care-box.nix`):
+
+```
+/var/lib/care-box-backups/          (avocado, 0750 care-box-backup)
+  2026-10-07T034512Z/               one snapshot per run, named by UTC start time
+    care.dump                       pg_dump -Fc of `care`
+    s3/                             VersityGW's tree, with its user.* xattrs
+    MANIFEST                        sizes, file count, TOC entries
+  latest -> 2026-10-07T034512Z
+```
+
+- **Pull, not push.** lumine holds no credentials for avocado. avocado's key
+  (`secrets/care-box-backup_ed25519`) logs in as the Pi's `care-backup`
+  user, whose root-owned `authorized_keys` (`lumine/backup/authorized_keys`)
+  allows only avocado's tailnet IP, with no shell or forwarding, and forces
+  `lumine/backup/backup-source.sh` via a sudoers rule for that script
+  alone. The script answers `pg_dump` (as postgres) or a read-only `rrsync`
+  of `/var/lib/care/s3` and refuses everything else, including writes and
+  `../` paths (both tested).
+- **Cheap dailies.** `rsync --link-dest` hardlinks unchanged uploads to the
+  previous snapshot, so a day costs what changed plus the dump (~1 MB for
+  the demo data).
+- **A dump only counts if it reads back.** `pg_restore --list` must parse it.
+  A run is built in `<stamp>.partial` and renamed when complete, and
+  leftovers of a failed run are deleted on the next one.
+- **Retention: 7 days**, pruned by name, and only after a successful run, so
+  failing backups never delete the last good ones.
+- **The `xattrs` matter**: they hold each bucket's ACL and policy (e.g.
+  `care-facility`'s anonymous GetObject) and each object's S3 metadata.
+- **Alerts**: after every run the service writes `care_box_backup_*`
+  textfile metrics (last success, last result, sizes, snapshot count),
+  behind `CareBoxBackupStale` (critical, > 36h), `CareBoxBackupFailed` and
+  `CareBoxBackupMissing` ([Monitoring](monitoring.md)).
+
+```sh
+just box-backup      # run it now and print this run's log
+just box-backups     # snapshots, sizes, disk use, next run
+```
+
+Verified 2026-10-07 with the service's own script: a second run hardlinked
+everything, a 17-day-old snapshot was pruned, and the dump restored into a
+scratch database (10 users, 10 patients).
+
+### Restoring
+
+Destructive: it replaces the live database and uploads. Run from avocado:
+
+```sh
+snap=/var/lib/care-box-backups/latest              # or a dated snapshot
+just box-stop
+ssh lumine sudo systemctl stop versitygw
+# Database: recreate it empty, owned by care, then restore (as postgres).
+sudo cat $snap/care.dump | ssh lumine 'cd / && sudo -u postgres dropdb care &&
+  sudo -u postgres createdb -O care care && sudo -u postgres pg_restore --exit-on-error -d care'
+# Uploads: with their xattrs, owned by versitygw again (the backup can't keep
+# ownership because it runs unprivileged). Root on avocado reads the
+# snapshot; your SSH key reaches lumine.
+sudo rsync -rltX --delete --rsync-path='sudo rsync' --chown=versitygw:versitygw \
+  -e 'ssh -i /run/secrets/rithviknishad/ssh_id_ed25519' \
+  $snap/s3/ rithviknishad@lumine:/var/lib/care/s3/
+ssh lumine sudo systemctl start versitygw
+just box-start
+just box-health
+```
 
 ## Gotchas
 
