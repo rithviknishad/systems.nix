@@ -20,6 +20,7 @@
     ../../modules/monitoring.nix
     ../../modules/cloudflared.nix
     ../../modules/docker.nix
+    ../../modules/care-box.nix
 
     ../../modules/zerodha-kite.nix
     ../../modules/settle-up-mcp.nix

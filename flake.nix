@@ -115,6 +115,9 @@
               pkgs.mkpasswd
               pkgs.nixfmt
               pkgs.git
+              # `just box-*` ships files to lumine with --chown/--chmod, which
+              # macOS's bundled openrsync doesn't support.
+              pkgs.rsync
               pkgs.cloudflared
               pkgs.kubectl
               pkgs.kubernetes-helm
@@ -126,7 +129,7 @@
             # (Respects an already-set SOPS_AGE_KEY_FILE if you have one.)
             shellHook = ''
               export SOPS_AGE_KEY_FILE="''${SOPS_AGE_KEY_FILE:-$HOME/.config/sops/age/keys.txt}"
-              echo "avocado devshell ready — tools: sops age ssh-to-age mkpasswd nixos-anywhere nixfmt cloudflared kubectl helm helmfile"
+              echo "avocado devshell ready — tools: sops age ssh-to-age mkpasswd nixos-anywhere nixfmt cloudflared kubectl helm helmfile rsync"
               echo "SOPS_AGE_KEY_FILE=$SOPS_AGE_KEY_FILE"
             '';
           };

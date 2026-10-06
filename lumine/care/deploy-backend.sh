@@ -15,7 +15,7 @@
 # is marked complete only at its very end, so an interrupted run is redone
 # from scratch next time while the old release keeps serving.
 #
-#   just box-deploy [ref] [repo]    (= sudo lumine/care/deploy-backend.sh ...)
+#   just box-deploy [ref] [repo]    (from the admin machine)
 set -euo pipefail
 
 REF=${1:-rithviknishad/bodhi/ENG-737-test-fixtures}
@@ -25,7 +25,6 @@ PIPENV_VERSION=2025.1.1
 
 [ "$(id -u)" -eq 0 ] || { echo "deploy-backend.sh: run as root" >&2; exit 1; }
 here=$(cd "$(dirname "$0")" && pwd)
-repo_root=$(cd "$here/../.." && pwd)
 # Commands run as care can't read the invoking user's cwd (python -m dies on it).
 cd /
 base=/opt/care/backend
@@ -35,9 +34,10 @@ die() { echo "deploy-backend.sh: $*" >&2; exit 1; }
 [ -f /etc/care/care.env ] || die "missing /etc/care/care.env: run just box-secrets-render first"
 systemctl cat care.target >/dev/null 2>&1 || die "care units not installed: run just box-provision first"
 
-# avocado's plug list (k8s/care/additional-plugs.json) minus TeleICU, so abdm
-# stays at avocado's pinned sha by construction.
-plugs=$(python3 - "$repo_root/k8s/care/additional-plugs.json" <<'EOF'
+# avocado's plug list (k8s/care/additional-plugs.json, shipped next to this
+# script by `just box-sync`) minus TeleICU, so abdm stays at avocado's pinned
+# sha by construction.
+plugs=$(python3 - "$here/additional-plugs.json" <<'EOF'
 import json, sys
 teleicu = {"gateway_device", "camera_device", "vitals_observation_device"}
 print(json.dumps([p for p in json.load(open(sys.argv[1])) if p["name"] not in teleicu]))
@@ -60,8 +60,6 @@ fi
 
 # HOME (pip/pipenv caches) becomes care's home, /opt/care.
 as_care() { runuser -u care -- "$@"; }
-# git refuses to work in a checkout owned by another user ("dubious ownership").
-as_owner() { runuser -u "$(stat -c %U "$repo_root")" -- "$@"; }
 
 if [ ! -f "$rel/.complete" ]; then
   log "building $REPO@$REF ($sha) into $rel"
@@ -96,7 +94,7 @@ if [ ! -f "$rel/.complete" ]; then
     echo "sha=$sha"
     echo "plugs=$plugs"
     echo "built=$(date -Iseconds)"
-    echo "systems.nix=$(as_owner git -C "$repo_root" rev-parse --short HEAD)$(as_owner git -C "$repo_root" diff --quiet HEAD -- lumine k8s/care/additional-plugs.json || echo -dirty)"
+    echo "systems.nix=$(cat "$here/../SYSTEMS_NIX_REVISION" 2>/dev/null || echo unknown)"
   } >"$rel/REVISION"
   chown care:care "$rel/build.env" "$rel/REVISION"
 

@@ -11,8 +11,10 @@ nav_order: 13.5
 same configuration as avocado, **minus everything TeleICU**. Unlike the
 rest of this repo it is **not NixOS and not k8s**. It runs Raspberry Pi OS
 (Debian 13 trixie) with plain systemd units, all configured from
-[`lumine/`](https://github.com/rithviknishad/systems.nix/tree/main/lumine)
-and applied with `box-*` recipes that run **on lumine itself**.
+[`lumine/`](https://github.com/rithviknishad/systems.nix/tree/main/lumine).
+**avocado (or the Mac) is its control plane**: the `box-*` recipes run
+there, from this repo, and drive lumine over SSH + sudo. The Pi itself has no
+repo checkout, no sops and no agent tooling; it only runs CARE.
 
 The build-out plan, the decisions behind it and a dated status log live in
 `lumine/PLAN.md`. This page documents what actually exists.
@@ -22,7 +24,7 @@ The build-out plan, the decisions behind it and a dated status log live in
 | Public URL | `https://care-box.rithviknishad.dev` (lumine's own Cloudflare tunnel `lumine`) |
 | Access | `ssh rithviknishad@lumine` (tailnet, `100.67.15.72`) or `lumine.local` (LAN) |
 | OS | Raspberry Pi OS (Debian 13 trixie, arm64), on the SD card (SSD deferred) |
-| Repo clone | `~/systems.nix` on lumine; run the `box-*` recipes there, outside any devshell (there's no Nix on the box) |
+| Control plane | this repo on avocado or the Mac (in the devshell): `just box-*` ssh to `rithviknishad@lumine`. Scripts and config are shipped to a root-owned `/usr/local/lib/care-box` on the box (`just box-sync`, run by every recipe that needs it) |
 
 ```mermaid
 flowchart LR
@@ -38,11 +40,11 @@ flowchart LR
     worker -->|"SMTP over the tailnet"| mailpit[avocado Mailpit]
 ```
 
-Bring-up on a fresh box, in order (everything is idempotent):
+Bring-up on a fresh box, in order, from avocado (everything is idempotent):
 
 ```sh
 just box-provision         # packages, users, units, nginx site, tunnel config
-just box-secrets-render    # decrypt with the host key; starts versitygw + the tunnel
+just box-secrets-render    # decrypt here, render there; starts versitygw + the tunnel
 just box-deploy            # build the backend, migrate, start care.target
 just box-buckets           # buckets + the care-facility policy
 just box-fe                # ON AVOCADO: build + ship the SPA and the ABDM MFE
@@ -50,23 +52,61 @@ just box-seed-demo         # demo fixtures, then admin's password from the sops 
 just box-register-abdm     # plug_config for the ABDM MFE
 ```
 
+## Control plane
+
+Nothing about care-box is operated from the Pi itself. The recipes run where
+this repo is (avocado or the Mac), and reach the box as `rithviknishad@lumine`
+over the tailnet (passwordless sudo there):
+
+- **Scripts and config** (`lumine/` minus `PLAN.md`, plus avocado's
+  `k8s/care/additional-plugs.json` and a `SYSTEMS_NIX_REVISION` stamp) are
+  rsynced to **`/usr/local/lib/care-box`**, root-owned and read-only to
+  everyone else, by `just box-sync`. Every recipe that runs a script there
+  syncs first, so the box always runs this checkout's version, like `just
+  deploy` does for avocado. It's deliberately not under `/opt/care`: the
+  `care` user owns that, and must not be able to rewrite what root runs.
+- **Secrets** are decrypted on the control plane with its own age key and
+  streamed to the box over SSH stdin, never argv or a temp file
+  (`box-secrets-render`, `box-seed-demo`). lumine isn't a sops recipient,
+  so the Pi holds only the rendered files it runs on and can't open
+  anything in `secrets/`.
+- **Host key**: avocado pins lumine's SSH host key system-wide
+  (`modules/care-box.nix`). On the Mac it's trust-on-first-use.
+
+| Recipe | What |
+|---|---|
+| `just box-status` | units, running revisions (backend, SPA, MFE, ops scripts), memory, disk, temperature + throttling |
+| `just box-health` | every unit active and none failed, postgres/redis/VersityGW/gunicorn/nginx on the box, then the public URL end to end. Non-zero exit on any failure |
+| `just box-start` / `box-stop` / `box-restart` | the backend (`care.target`: beat, API, worker). Start/restart wait for beat's migrations and then for gunicorn to answer. Postgres, redis, VersityGW, nginx and the tunnel keep running |
+| `just box-offline` / `box-online` | stop/start the tunnel: the public URL goes down (Cloudflare's 530 page) while the box stays up |
+| `just box-logs [unit]` | follow `care-*` (or any unit's) journal |
+| `just box-manage <cmd> [args]` | `manage.py` as `care` with the units' env (pty when interactive) |
+| `just box-deploy [ref] [repo]` | build + roll out the backend |
+| `just box-fe [ref] [repo]` | build + ship the SPA and the ABDM MFE (on avocado) |
+| `just box-provision` / `box-upgrade` | converge the base system / `apt full-upgrade` |
+| `just box-secrets` / `box-secrets-render` | edit the sops file / render it onto the box |
+| `just box-ssh` | a shell on lumine |
+
+Stops and `box-offline` aren't persistent: the units are enabled, so a
+reboot brings everything back.
+
 ## Base system
 
-`just box-provision` (= `sudo lumine/provision.sh`) converges the box. It's
+`just box-provision` (`lumine/provision.sh`) converges the box. It's
 idempotent: every step compares against the current state, so re-running
 it is a no-op unless something under `lumine/` changed, and that's how such
 changes get applied.
 
 - **Packages**: `postgresql-17`, `redis-server` (8.0), `nginx`, `cloudflared`
   (from Cloudflare's apt repo; the signing-key fingerprint is pinned in the
-  script), `just`, `awscli`, plus CARE's build deps (the same set as the
+  script), `awscli`, plus CARE's build deps (the same set as the
   builder stage of upstream's `docker/prod.Dockerfile`, plus Debian's
   split-out `python3-venv`/`python3-dev`) and runtime libs (gettext,
   libmagic, pango/harfbuzz for weasyprint PDFs).
-- **Pinned release binaries** in `/usr/local/bin`: `sops` 3.13.1 (avocado's
-  devshell version) and VersityGW 1.8.0 (the image tag in
-  `k8s/care/care.yaml`). Their sha256s are pinned in the script, not
-  fetched next to the download.
+- **Pinned release binary** in `/usr/local/bin`: VersityGW 1.8.0 (the image
+  tag in `k8s/care/care.yaml`). Its sha256 is pinned in the script, not
+  fetched next to the download. (sops and `just` were used while the box
+  ran its own recipes; provisioning now removes them.)
 - **Users and paths**: system user `care` (home `/opt/care`). Code and
   venv go in `/opt/care`, data in `/var/lib/care`, and the rendered env
   file with decrypted secrets in `/etc/care` (root, `0700`).
@@ -127,8 +167,8 @@ non-current releases are kept (~330 MB each).
 - **What's running**: `/opt/care/backend/current/REVISION` (repo, ref, sha,
   plugs, build time, and the systems.nix commit it was built from), or
   `just box-status`.
-- **Rollback**: `sudo ln -sfn <older-release> /opt/care/backend/current &&
-  just box-restart`. Migrations don't roll back, so the old code meets the
+- **Rollback**: `ssh lumine sudo ln -sfn <older-release> /opt/care/backend/current`,
+  then `just box-restart`. Migrations don't roll back, so the old code meets the
   newer schema, the same as rolling back an image on avocado.
 - **Plugs**: `ADDITIONAL_PLUGS` = avocado's `k8s/care/additional-plugs.json`
   **minus the three TeleICU plugs**, i.e. just `abdm` at avocado's pinned
@@ -149,9 +189,10 @@ non-current releases are kept (~330 MB each).
 The units load two env files: `/etc/care/care.env` and the release's
 `build.env`.
 
-`just box-secrets-render` (`lumine/render-secrets.sh`) decrypts with the host
-key into **one root-only (`0600`) file per consumer**, so each service sees
-only its own secrets:
+`just box-secrets-render` (`lumine/render-secrets.sh`) decrypts
+`secrets/care-box.enc.env` and `secrets/lumine-cloudflared.json` **on the
+control plane** and streams them over SSH into **one root-only (`0600`) file
+per consumer**, so each service sees only its own secrets:
 
 | File | Contents | Consumer |
 |---|---|---|
@@ -160,8 +201,9 @@ only its own secrets:
 | `/etc/cloudflared/<tunnel-id>.json` | `secrets/lumine-cloudflared.json` (sops binary), checked against the tunnel id | `cloudflared-lumine` (via `LoadCredential=`) |
 
 Keys starting with `BOX_` (e.g. `BOX_ADMIN_PASSWORD`) are for humans and
-recipes only and are left out. Plaintext is staged next to its destination
-(atomic rename, root-only directory), never in the repo or on stdout. Both
+recipes only and are left out. On the box, plaintext is staged next to its
+destination (atomic rename, root-only directory), never in `/tmp` or on stdout,
+and the script refuses a truncated stream. Both
 env files are read back **through systemd's own `EnvironmentFile=` parser**
 to check that every value round-trips; only key names are reported. That
 check matters because systemd's syntax isn't shell: unquoted double quotes
@@ -170,9 +212,8 @@ rewritten when it changed, and then its consumer is restarted
 (`care.target` if it was running; `versitygw`/`cloudflared-lumine`
 whenever they're enabled, including their first start).
 
-`just box-secrets` edits the sops file as root with the host key. sops
-re-encrypts to every recipient, so avocado and the admin Mac can still read
-it. Follow it with `just box-secrets-render`.
+`just box-secrets` edits the sops file with the control plane's age key.
+Follow it with `just box-secrets-render`.
 
 Two settings differ from upstream's `config.settings.deployment`. They live
 in `lumine/care/care_box_settings.py`, which every build copies to
@@ -192,15 +233,18 @@ in `lumine/care/care_box_settings.py`, which every build copies to
 ### Operating it
 
 ```sh
-just box-status                      # units, running REVISION, free -h
+just box-status                      # units, running REVISION, memory, disk, temperature
+just box-health                      # everything up? (non-zero exit if not)
 just box-logs                        # follow all care-* units (or: just box-logs care-beat)
 just box-manage <command> [args]     # manage.py as care, with the units' exact env
-just box-restart                     # restart beat (migrates) -> API + worker
+just box-restart                     # restart beat (migrates) -> API + worker, wait until ready
 ```
 
 Peer auth means `DATABASE_URL=postgres:///care` works only as the `care` OS
 user, which is why `box-manage` goes through `lumine/care/manage.sh`
-(`systemd-run` with the units' env files, a pty when interactive). Scripts
+(`systemd-run` with the units' env files, a pty when interactive). The
+recipe shell-quotes its arguments for the remote side, so
+`just box-manage shell -c 'print(1)'` arrives intact. Scripts
 can add one-off, non-secret variables with leading `--setenv=K=V` options.
 Never pass secrets that way: a transient unit's environment is readable by
 every local user through `systemctl show`. Celery's
@@ -214,7 +258,7 @@ Check the worker with:
 The SPA and the ABDM MFE are **built on avocado, not on the Pi**. care_fe's
 Vite build needs ~4 GB of RAM and lumine has 2 GB, while the output is
 architecture-independent static files. `just box-fe [ref] [repo]` runs **on
-avocado**, from its systems.nix checkout:
+avocado** (it needs docker and the RAM):
 
 - builds care_fe at the head of `bodhi/questionnaire-actions` with the same
   `.env.local` as `care-fe-image`, but with
@@ -236,17 +280,8 @@ avocado**, from its systems.nix checkout:
 `REVISION` sits next to `html/`, not inside it, so build metadata isn't
 served. A half whose `<id>` is already live is skipped. The two previous
 builds of each are kept, so a rollback is
-`sudo ln -sfn <id> /opt/care/fe/current` on lumine. It takes effect on the
+`ssh lumine sudo ln -sfn <id> /opt/care/fe/current`. It takes effect on the
 next request, with no reload.
-
-Until this repo state is on avocado, run lumine's copy of `box-fe` against
-avocado's checkout:
-
-```sh
-cd ~/systems.nix   # on avocado
-ssh lumine cat systems.nix/justfile > /tmp/box.justfile
-just -f /tmp/box.justfile -d . box-fe
-```
 
 ## Storage, routing and the tunnel
 
@@ -396,13 +431,17 @@ for per-facility setup (HFR link, HRP service registration).
   limits sized from measurements: API 450M/650M, worker 400M/600M, beat
   350M/600M (High/Max). Beat gets extra room because its migrations run in
   its own cgroup, and an OOM-killed migration would just retry forever.
-- **Secrets decrypt with the SSH host key.** lumine is a sops recipient
-  (`&lumine` in `.sops.yaml`) for its own two files only:
-  `sudo env SOPS_AGE_SSH_PRIVATE_KEY_FILE=/etc/ssh/ssh_host_ed25519_key sops -d secrets/care-box.enc.env`.
-  Decrypted copies only ever go to root-owned `0600` files outside the repo.
-- **Agent sessions cost RAM.** A Cursor server plus agents on the box take
-  ~850 MB RSS, close to half the RAM. Expect swap use (2 GB zram) while one
-  is connected.
+- **lumine can't decrypt its own secrets, on purpose.** It isn't a sops
+  recipient (`.sops.yaml`); the control plane decrypts and streams. To read
+  a value, use `sops -d secrets/care-box.enc.env` on avocado or the Mac.
+  Decrypted copies on the box only ever go to root-owned `0600` files.
+- **Keep the box free of agent sessions.** A Cursor/Zed remote server plus
+  agents took ~850 MB RSS during the build-out, close to half the RAM. Work
+  on it from avocado instead.
+- **`systemctl stop care.target` returns before the services are down.** The
+  target stops first (it's ordered after its services) and the services
+  after it, so a quick `start` can cancel a still-queued stop. `box-stop`
+  names the services explicitly, and start/restart wait for gunicorn.
 - **Login rate limiting is effectively global.** CARE's `ratelimit()` keys
   on `REMOTE_ADDR`, which behind nginx is always `127.0.0.1` (gunicorn takes
   it from the socket peer), so every client shares one per-IP bucket. A burst

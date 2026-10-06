@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Demo data for care-box (lumine/PLAN.md decision 5): CARE's load_fixtures
 # (org tree, facilities, demo users with the well-known password Ohcn@123,
-# sample patients), then admin's password set to BOX_ADMIN_PASSWORD from the
-# sops secrets. Like avocado's `just care-seed-demo`, except that Faker (a
+# sample patients), then admin's password set to BOX_ADMIN_PASSWORD, which
+# the admin machine decrypts from the sops secrets and sends as the first
+# line of stdin. Like avocado's `just care-seed-demo`, except that Faker (a
 # dev-only dependency) goes into a throwaway directory instead of the release
 # venv, and the weak admin/admin is rotated in the same step.
 #
@@ -11,16 +12,16 @@
 # resets admin to admin/admin. The password step runs every time and is a
 # no-op once set.
 #
-#   just box-seed-demo        (= sudo lumine/care/seed-demo.sh)
+#   just box-seed-demo        (from the admin machine)
 set -euo pipefail
 
 [ "$(id -u)" -eq 0 ] || { echo "seed-demo.sh: run as root" >&2; exit 1; }
+[ ! -t 0 ] || { echo "seed-demo.sh: expects BOX_ADMIN_PASSWORD on stdin; use just box-seed-demo" >&2; exit 1; }
+IFS= read -r admin_pw || true
 here=$(cd "$(dirname "$0")" && pwd)
-repo=$(cd "$here/../.." && pwd)
 cd /
 manage=$here/manage.sh
 rel=$(readlink -f /opt/care/backend/current)
-export SOPS_AGE_SSH_PRIVATE_KEY_FILE=/etc/ssh/ssh_host_ed25519_key
 log() { printf '==> %s\n' "$*"; }
 
 # </dev/null keeps manage.sh on plain pipes (no pty) so output parses cleanly.
@@ -52,9 +53,9 @@ EOF
 fi
 
 # The password reaches Python only through this pipe, never argv or the
-# environment, and the code never echoes it.
+# environment, and the code never echoes it. printf is a builtin, so no argv.
 log "admin password <- BOX_ADMIN_PASSWORD"
-sops -d "$repo/secrets/care-box.enc.env" | sed -n 's/^BOX_ADMIN_PASSWORD=//p' |
+printf '%s\n' "$admin_pw" |
   "$manage" shell -v 0 -c '
 import sys
 from django.contrib.auth import get_user_model

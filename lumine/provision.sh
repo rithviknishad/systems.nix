@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Base system for CARE in a box on lumine (lumine/PLAN.md, docs/care-box.md):
-# packages, the cloudflared apt repo, pinned sops + VersityGW binaries, the
+# packages, the cloudflared apt repo, the pinned VersityGW binary, the
 # `care` and `versitygw` users and their directories, Postgres tuning and the
 # `care` role/db, the systemd units in lumine/systemd/, the nginx site and the
 # cloudflared config. Secrets are separate: lumine/render-secrets.sh.
@@ -10,7 +10,10 @@
 # applied. It installs missing packages but never upgrades existing ones
 # (that's `just box-upgrade`), and never touches /boot/firmware or the EEPROM.
 #
-#   just box-provision        (= sudo lumine/provision.sh)
+# Runs from /usr/local/lib/care-box, the root-owned copy of lumine/ that
+# `just box-sync` keeps current; the box has no repo checkout of its own.
+#
+#   just box-provision        (from the admin machine)
 set -euo pipefail
 
 [ "$(id -u)" -eq 0 ] || { echo "provision.sh: run as root" >&2; exit 1; }
@@ -22,10 +25,8 @@ trap 'rm -rf "$tmp"' EXIT
 export DEBIAN_FRONTEND=noninteractive
 
 # Checksums are pinned here rather than fetched next to the download, so the
-# repo records exactly which bytes run on the box. sops = avocado's devshell
-# version; VersityGW = the image tag in k8s/care/care.yaml.
-SOPS_VERSION=3.13.1
-SOPS_SHA256=19576fb1734dbf8fb77eda0cf0f3a2218f99bf4d33b814318e5e10d6babb9820
+# repo records exactly which bytes run on the box. VersityGW = the image tag
+# in k8s/care/care.yaml.
 VERSITYGW_VERSION=1.8.0
 VERSITYGW_SHA256=b34051d33f5a9c457f790896acb7bd7d7e15ad8d92efb70616b924f37e401910
 # "CloudFlare Software Packaging 2025": Cloudflare rolled its signing key on
@@ -34,7 +35,7 @@ CLOUDFLARE_KEY_FPR=CC94B39C77AE7342A68B89628A682D308D4E5E73
 
 PACKAGES=(
   postgresql-17 redis-server nginx cloudflared
-  git rsync just awscli curl ca-certificates gnupg
+  git rsync awscli curl ca-certificates gnupg
   # Build deps of CARE's venv: the same set as the builder stage of
   # upstream's docker/prod.Dockerfile, plus Debian's split-out venv/headers.
   build-essential python3-dev python3-venv libpq-dev libjpeg-dev zlib1g-dev
@@ -112,12 +113,16 @@ if [ -L /etc/nginx/sites-enabled/default ]; then
 fi
 
 # --- pinned release binaries -------------------------------------------------
-if [ "$(sha256sum /usr/local/bin/sops 2>/dev/null | cut -d' ' -f1)" != "$SOPS_SHA256" ]; then
-  curl -fsSL -o "$tmp/sops" \
-    "https://github.com/getsops/sops/releases/download/v$SOPS_VERSION/sops-v$SOPS_VERSION.linux.arm64"
-  echo "$SOPS_SHA256  $tmp/sops" | sha256sum -c --quiet
-  install -m 755 "$tmp/sops" /usr/local/bin/sops
-  log "installed sops $SOPS_VERSION"
+# sops and just were needed while the box ran its own recipes from a repo
+# clone. avocado is the control plane now (secrets arrive decrypted over
+# SSH), so they're removed: nothing on the box can decrypt the repo's secrets.
+if [ -e /usr/local/bin/sops ]; then
+  rm -f /usr/local/bin/sops
+  log "removed /usr/local/bin/sops"
+fi
+if [ "$(dpkg-query -W -f='${db:Status-Abbrev}' just 2>/dev/null)" = "ii " ]; then
+  apt-get purge -y -q just
+  log "purged just"
 fi
 
 # The tarball is what's checksummed upstream, so the installed binary is

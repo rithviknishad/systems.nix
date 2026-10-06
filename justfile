@@ -835,85 +835,209 @@ apps-dns:
 
 # --- lumine: CARE in a box (https://care-box.rithviknishad.dev) --------------
 # Raspberry Pi 5 on Raspberry Pi OS (no Nix, no k8s): CARE as plain systemd
-# units, configured from lumine/. Unlike everything above, these recipes run
-# ON lumine (from the repo clone at ~/systems.nix, outside any devshell) and
-# use sudo. See docs/care-box.md.
+# units, configured from lumine/. This machine (avocado or the Mac) is its
+# control plane: the recipes run HERE and drive lumine over SSH + sudo. The
+# box has no repo checkout and no sops: `box-sync` ships lumine/ to a
+# root-owned copy on the box, and secrets are decrypted here and streamed in
+# over SSH. See docs/care-box.md.
 
-# Packages, cloudflared apt repo, pinned sops + VersityGW binaries, the care
-# user/dirs, Postgres tuning + role. Idempotent: re-run after editing lumine/.
+box_ssh    := "rithviknishad@lumine"
+box_ops    := "/usr/local/lib/care-box"
+box_origin := "https://care-box.rithviknishad.dev"
+
+# Root-owned and read-only to everyone else: root runs these, so the care
+# user (which owns /opt/care) must not be able to rewrite them. PLAN.md stays
+# behind; avocado's plug list and this checkout's revision ride along for
+# deploy-backend.sh. Every recipe that runs a script on the box syncs first.
+# Ship lumine/ (scripts + config) to the box's /usr/local/lib/care-box.
+box-sync:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    stage=$(mktemp -d)
+    trap 'rm -rf "$stage"' EXIT
+    chmod 755 "$stage"
+    rsync -a --exclude PLAN.md lumine/ "$stage/"
+    cp k8s/care/additional-plugs.json "$stage/care/"
+    rev=$(git rev-parse --short HEAD)
+    [ -z "$(git status --porcelain -- lumine k8s/care/additional-plugs.json)" ] || rev=$rev-dirty
+    echo "$rev" >"$stage/SYSTEMS_NIX_REVISION"
+    rsync -rlpt --delete --rsync-path='sudo rsync' --chown=root:root --chmod=go-w \
+        "$stage/" "{{box_ssh}}:{{box_ops}}/"
+
+# Packages, cloudflared apt repo, pinned VersityGW, the care user/dirs,
+# Postgres tuning + role, units, nginx site, tunnel config. Idempotent: run it
+# after editing anything under lumine/.
 # Converge lumine's base system (lumine/provision.sh).
-box-provision:
-    sudo lumine/provision.sh
+box-provision: box-sync
+    ssh {{box_ssh}} sudo {{box_ops}}/provision.sh
 
 # Kept out of box-provision so upgrades are always deliberate. Kernel and
 # firmware updates take effect on the next reboot (ask before rebooting).
 # apt full-upgrade lumine.
 box-upgrade:
-    sudo apt-get update -q
-    sudo DEBIAN_FRONTEND=noninteractive apt-get -y -q full-upgrade
+    ssh -t {{box_ssh}} 'sudo apt-get update -q && sudo DEBIAN_FRONTEND=noninteractive apt-get -y -q full-upgrade'
 
-# Decrypts with lumine's SSH host key into root-only files, one per consumer:
-# /etc/care/care.env (care-*), /etc/care/versitygw.env, the tunnel creds.
-# Values are never printed; the env files are checked through systemd's own
-# parser. Restarts whatever consumes a changed file.
-# Decrypt lumine's secrets onto the box (lumine/render-secrets.sh).
-box-secrets-render:
-    sudo lumine/render-secrets.sh
+# Decrypted HERE with this machine's age key; the plaintext goes to the box
+# only over SSH stdin (never argv, never a temp file) and lands in root-only
+# files there, one per consumer: /etc/care/care.env (care-*),
+# /etc/care/versitygw.env, the tunnel creds. Values are never printed; the
+# env files are checked through systemd's own parser. Restarts whatever
+# consumes a changed file.
+# Render lumine's secrets onto the box (lumine/render-secrets.sh).
+box-secrets-render: box-sync
+    #!/usr/bin/env bash
+    set -euo pipefail
+    app=$(sops -d secrets/care-box.enc.env)
+    tunnel=$(sops -d --input-type binary --output-type binary secrets/lumine-cloudflared.json | base64 | tr -d '\n')
+    printf '%s\n_TUNNEL_JSON_B64=%s\n' "$app" "$tunnel" | ssh {{box_ssh}} sudo {{box_ops}}/render-secrets.sh
 
-# sops re-encrypts to every recipient in .sops.yaml, so avocado and the admin
-# Mac can still read the result. Then: just box-secrets-render.
-# Edit lumine's app secrets (as root, decrypting with the host key).
+# Then: just box-secrets-render.
+# Edit lumine's app secrets (secrets/care-box.enc.env).
 box-secrets:
-    sudo env SOPS_AGE_SSH_PRIVATE_KEY_FILE=/etc/ssh/ssh_host_ed25519_key sops secrets/care-box.enc.env
+    sops secrets/care-box.enc.env
 
 # Defaults to the tracked branch (lumine/care/deploy-backend.sh); a no-op when
 # the running release already is its head with the same plugs + settings.
-# Restarts care.target, which blocks until beat's migrations are done:
+# Restarts care.target, which blocks until beat's migrations are done, then
+# waits for gunicorn to answer:
 #   just box-deploy                                   # tracked branch head
 #   just box-deploy develop ohcnetwork/care           # another ref/repo
-# Build + roll out the CARE backend (lumine/care/deploy-backend.sh).
+# Build + roll out the CARE backend on lumine (lumine/care/deploy-backend.sh).
 [positional-arguments]
-box-deploy *args:
-    sudo lumine/care/deploy-backend.sh "$@"
+box-deploy *args: box-sync && _box-wait-api
+    #!/usr/bin/env bash
+    set -euo pipefail
+    q=; [ $# -eq 0 ] || q=$(printf '%q ' "$@")
+    ssh {{box_ssh}} sudo {{box_ops}}/care/deploy-backend.sh "$q"
 
-# Restart the backend; beat re-runs migrations before API + worker start.
-box-restart:
-    sudo systemctl restart care.target
+# The backend only (beat + API + worker); postgres, redis, VersityGW, nginx
+# and the tunnel keep running. Not persistent: care.target is enabled, so a
+# reboot starts it again. The services are named explicitly so systemctl
+# waits for them to be down (a stop of the target alone returns first).
+# Stop / start / restart CARE on lumine (care.target).
+box-stop:
+    ssh {{box_ssh}} sudo systemctl stop care.target care-api.service care-worker.service care-beat.service
+
+# Beat re-runs migrations before the API + worker start; both recipes wait
+# for that and then for gunicorn to answer.
+box-start: && _box-wait-api
+    ssh {{box_ssh}} sudo systemctl start care.target
+
+box-restart: && _box-wait-api
+    ssh {{box_ssh}} sudo systemctl restart care.target
+
+# gunicorn --preload imports Django before it listens: ~10 s on the Pi after
+# its unit is already "active".
+[private]
+_box-wait-api:
+    #!/usr/bin/env bash
+    ssh {{box_ssh}} bash -s <<'EOF'
+    for _ in $(seq 60); do
+      if curl -fs -m 2 -o /dev/null -H 'Host: care-box.rithviknishad.dev' http://127.0.0.1:9000/api/v1/plug_config/; then
+        echo "care-api ready"
+        exit 0
+      fi
+      sleep 2
+    done
+    echo "care-api not answering after 120 s: just box-logs care-api" >&2
+    exit 1
+    EOF
+
+# Takes the public URL down (Cloudflare then serves its own 530 error page)
+# while the backend keeps running for maintenance over SSH. Not persistent
+# across reboots either.
+# Cut / restore care-box's public access (the lumine tunnel).
+box-offline:
+    ssh {{box_ssh}} sudo systemctl stop cloudflared-lumine.service
+
+box-online:
+    ssh {{box_ssh}} sudo systemctl start cloudflared-lumine.service
 
 # Fixtures load only once (demo users + Ohcn@123 passwords, public!); the
-# password step runs every time. See lumine/care/seed-demo.sh.
+# password step runs every time. The password is decrypted HERE and reaches
+# the box on SSH stdin only. See lumine/care/seed-demo.sh.
 # Load CARE's demo fixtures, then set admin's password from BOX_ADMIN_PASSWORD.
-box-seed-demo:
-    sudo lumine/care/seed-demo.sh
+box-seed-demo: box-sync
+    #!/usr/bin/env bash
+    set -euo pipefail
+    pw=$(sops -d secrets/care-box.enc.env | sed -n 's/^BOX_ADMIN_PASSWORD=//p')
+    printf '%s\n' "$pw" | ssh {{box_ssh}} sudo {{box_ops}}/care/seed-demo.sh
 
 # Via the ORM on the box (no admin credentials); clears the cached plug list.
 # Register the ABDM MFE (plug_config `abdm`) for the care-box origin.
-box-register-abdm:
-    sudo lumine/care/manage.sh shell -v 0 < lumine/care/register_abdm.py
+box-register-abdm: box-sync
+    ssh {{box_ssh}} sudo {{box_ops}}/care/manage.sh shell -v 0 < lumine/care/register_abdm.py
 
 # Mirrors avocado's versitygw-buckets Job (minus TeleICU's bucket).
 # Create CARE's buckets + the care-facility policy on VersityGW. Idempotent.
-box-buckets:
-    sudo lumine/care/buckets.sh
+box-buckets: box-sync
+    ssh {{box_ssh}} sudo {{box_ops}}/care/buckets.sh
 
-# Show lumine's CARE units, the running revisions and memory.
+# Show lumine's units, running revisions, memory, disk and Pi health.
 box-status:
+    #!/usr/bin/env bash
+    ssh {{box_ssh}} bash -s <<'EOF'
     systemctl list-units --no-pager --all 'care*' postgresql@17-main.service redis-server.service nginx.service versitygw.service cloudflared-lumine.service
-    @for d in backend fe abdm-fe; do echo "--- $d: $(readlink /opt/care/$d/current)"; grep -E '^(repo|ref|sha)=' /opt/care/$d/current/REVISION 2>/dev/null || echo "not deployed"; done
-    @free -h
+    for d in backend fe abdm-fe; do
+      echo "--- $d: $(readlink /opt/care/$d/current)"
+      grep -E '^(repo|ref|sha|systems.nix)=' /opt/care/$d/current/REVISION 2>/dev/null || echo "not deployed"
+    done
+    echo "--- ops scripts: systems.nix $(cat /usr/local/lib/care-box/SYSTEMS_NIX_REVISION 2>/dev/null || echo 'not synced')"
+    echo "--- system"
+    uptime
+    free -h
+    df -h / /boot/firmware
+    echo "$(vcgencmd measure_temp) $(vcgencmd get_throttled) (0x0 = never throttled/under-volted since boot)"
+    EOF
+
+# Every unit active and nothing failed, the local endpoints (postgres, redis,
+# VersityGW, gunicorn, nginx) on the box, then the public URL end to end
+# through Cloudflare. Exits non-zero if anything is down, so it's scriptable.
+# Health-check care-box: units + local endpoints on lumine, then the public URL.
+box-health:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    rc=0
+    echo "--- on lumine"
+    ssh {{box_ssh}} bash -s <<'EOF' || rc=1
+    rc=0
+    check() { if "${@:2}" >/dev/null 2>&1; then echo "  ok    $1"; else echo "  FAIL  $1"; rc=1; fi; }
+    for u in postgresql@17-main redis-server nginx versitygw cloudflared-lumine care-beat care-api care-worker; do
+      check "unit $u" systemctl is-active --quiet "$u"
+    done
+    check "no failed units" test -z "$(systemctl --failed --no-legend --plain)"
+    check "postgres accepts connections" pg_isready -q
+    check "redis PING" redis-cli ping
+    host='Host: care-box.rithviknishad.dev'
+    check "versitygw /health" curl -fsS -m 5 http://127.0.0.1:7070/health
+    check "gunicorn /api/v1/plug_config/" curl -fsS -m 10 -H "$host" http://127.0.0.1:9000/api/v1/plug_config/
+    check "nginx / (SPA)" curl -fsS -m 5 -H "$host" http://127.0.0.1/
+    exit $rc
+    EOF
+    echo "--- public ({{box_origin}})"
+    for path in / /api/v1/plug_config/ /api/abdm/health /mfe-plugs/abdm/assets/remoteEntry.js; do
+      if curl -fsS -m 15 -o /dev/null "{{box_origin}}$path"; then echo "  ok    $path"; else echo "  FAIL  $path"; rc=1; fi
+    done
+    exit $rc
 
 # Follow the journal of every care-* unit, or one: just box-logs care-beat.
 box-logs unit="care-*":
-    journalctl -f -u '{{unit}}'
+    ssh -t {{box_ssh}} "sudo journalctl -f -u '{{unit}}'"
 
-# Interactive commands get a pty: just box-manage createsuperuser.
-# Run manage.py as care with the units' environment (lumine/care/manage.sh).
+# Interactive commands get a pty: just box-manage createsuperuser. Arguments
+# are shell-quoted for the remote side, so they arrive exactly as given.
+# Run manage.py on lumine as care with the units' environment (lumine/care/manage.sh).
 [positional-arguments]
-box-manage *args:
-    sudo lumine/care/manage.sh "$@"
+box-manage *args: box-sync
+    #!/usr/bin/env bash
+    set -euo pipefail
+    t=-T; if [ -t 0 ] && [ -t 1 ]; then t=-t; fi
+    q=; [ $# -eq 0 ] || q=$(printf '%q ' "$@")
+    ssh "$t" {{box_ssh}} sudo {{box_ops}}/care/manage.sh "$q"
 
-box_ssh := "rithviknishad@lumine"
-box_origin := "https://care-box.rithviknishad.dev"
+# SSH into lumine.
+box-ssh:
+    ssh {{box_ssh}}
 
 # Run ON AVOCADO: the Vite build needs ~4 GB of RAM and lumine has 2 GB, while
 # the output is architecture-independent static files. Builds care_fe at the

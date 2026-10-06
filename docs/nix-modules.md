@@ -57,8 +57,8 @@ imports = [
   ../../modules/kiosk.nix ../../modules/home-manager.nix
   ../../modules/tailscale.nix ../../modules/k3s.nix
   ../../modules/monitoring.nix ../../modules/cloudflared.nix
-  ../../modules/docker.nix ../../modules/zerodha-kite.nix
-  ../../modules/settle-up-mcp.nix
+  ../../modules/docker.nix ../../modules/care-box.nix
+  ../../modules/zerodha-kite.nix ../../modules/settle-up-mcp.nix
   ../../users/rithviknishad.nix
 ];
 ```
@@ -215,6 +215,14 @@ in at image build time; care_fe compiles the API URL into the bundle). The
 result straight into k3s's containerd (`k3s ctr images import`) — no registry,
 same idea as the Nix-built [zerodha-kite](zerodha-kite.md) image. Weekly `autoPrune` keeps build-cache
 layers from eating the pool. Nothing runs under docker; workloads live in k3s.
+
+### `care-box.nix` — control plane for the Pi
+
+avocado's side of [CARE in a box](care-box.md), which runs on the Raspberry
+Pi **lumine** (Raspberry Pi OS, configured from `lumine/` by the `box-*`
+recipes). It pins lumine's SSH host key in the system-wide `known_hosts`
+(under `lumine`, its tailnet FQDN, `lumine.local` and its tailnet IP), so
+neither a recipe run nor a root service trusts it on first use.
 
 ### `monitoring.nix` — host-side metrics glue
 

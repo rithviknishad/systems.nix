@@ -8,7 +8,7 @@
 #                   because CARE hands these out as plain unsigned URLs.
 #                   Listing stays denied.
 #
-#   just box-buckets        (= sudo lumine/care/buckets.sh)
+#   just box-buckets        (from the admin machine)
 set -euo pipefail
 
 [ "$(id -u)" -eq 0 ] || { echo "buckets.sh: run as root" >&2; exit 1; }

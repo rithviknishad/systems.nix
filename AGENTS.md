@@ -15,7 +15,7 @@ almost entirely through AI agents — follow these rules strictly.
 | `users/` | user accounts + SSH keys |
 | `secrets/` | sops-encrypted secrets (age); recipients in `.sops.yaml` |
 | `k8s/` | Kubernetes workloads on k3s (kustomize + helmfile) |
-| `lumine/` | Raspberry Pi **lumine** (Raspberry Pi OS, not NixOS): CARE in a box at `care-box.rithviknishad.dev`. Start at `lumine/PLAN.md` (it lists what differs when working on the Pi: no Nix, no kubeconfig) |
+| `lumine/` | Raspberry Pi **lumine** (Raspberry Pi OS, not NixOS): CARE in a box at `care-box.rithviknishad.dev`. Operated **from avocado/the Mac** with `just box-*` over SSH (never work on the Pi itself). Docs: `docs/care-box.md`; history: `lumine/PLAN.md` |
 | `docs/` | Jekyll site (just-the-docs), published to GitHub Pages |
 | `justfile` | ALL common operations — check here before inventing commands |
 

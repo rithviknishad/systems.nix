@@ -40,6 +40,13 @@ you) holds a key that can open them.
 | `secrets/kite.enc.yaml` | admin + avocado | Kite k8s Secret: JWT + encrypt keys, GitHub OAuth app id/secret, break-glass password |
 | `settle-up-mcp.enc.yaml` | admin + avocado | Settle Up MCP k8s Secret: account email + password, live Firebase Web API key, MCP bearer token |
 | `secrets/mailpit.enc.yaml` | admin + avocado | Mailpit k8s Secret: SMTP (`smtp-auth`) and web-inbox (`ui-auth`) password files |
+| `secrets/care-box.enc.env` | admin + avocado | [CARE in a box](care-box.md) on lumine (dotenv): Django key, JWKS, VersityGW root, ABDM client id/secret, Mailpit password, `BOX_ADMIN_PASSWORD` |
+| `secrets/lumine-cloudflared.json` | admin + avocado | lumine's own tunnel credentials (binary) |
+
+lumine (the Pi) is deliberately **not** a recipient of its own secrets.
+avocado or the Mac decrypts them and streams the plaintext over SSH into
+root-only files on the box (`just box-secrets-render`), so nothing on the Pi
+can open anything in `secrets/`.
 
 ## How the box consumes secrets
 

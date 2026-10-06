@@ -84,6 +84,12 @@ you go.
 
 ## Working ON lumine (agent running on the Pi)
 
+> **Superseded 2026-10-07 (after Phase 5):** avocado is now the control
+> plane. The repo clone, sops and agent tooling are gone from the Pi, the
+> `box-*` recipes run on avocado/the Mac over SSH, and lumine is no longer a
+> sops recipient (`docs/care-box.md` → Control plane). Kept for the record of
+> how Phases 1-5 were done.
+
 The implementing agent runs on lumine itself, in the repo clone at
 `~/systems.nix`. Things that differ from working on avocado/the Mac:
 
@@ -505,3 +511,17 @@ zram swap (2 GB) is the safety net; consider folding beat into the worker
     `--dry-run`); ABDM callbacks still go to avocado. Demo users keep the
     public `Ohcn@123` (decision 5 rotates only admin).
   - **Next: Phase 6** (backups + offsite copy, Gatus, Homepage, finish docs).
+- 2026-10-07 (on avocado): Phases 1-5 committed from the Pi's clone
+  (`eeabdbd`). **avocado is the control plane** from here on:
+  - `box-*` recipes run on avocado/the Mac and ssh to `rithviknishad@lumine`;
+    `just box-sync` ships `lumine/` (+ `additional-plugs.json`,
+    `SYSTEMS_NIX_REVISION`) to root-owned `/usr/local/lib/care-box`.
+  - Secrets are decrypted on the control plane and streamed over SSH stdin;
+    `&lumine` removed from `.sops.yaml` and both files re-keyed. Provision
+    removed sops + `just` from the box.
+  - New: `box-start`/`box-stop` (+ wait for gunicorn), `box-offline`/
+    `box-online` (tunnel), `box-health`, `box-ssh`. Verified from avocado:
+    provision (no drift), secrets-render (unchanged), deploy (up to date),
+    seed-demo (idempotent), `box-manage` quoting, stop -> health fails ->
+    start (16 s) -> health passes.
+  - Pinned lumine's host key on avocado (`modules/care-box.nix`).

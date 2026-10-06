@@ -6,7 +6,7 @@
 # one-off variables for this process only (never secrets: a transient unit's
 # environment is visible to every local user via `systemctl show`).
 #
-#   just box-manage <command> [args...]   (= sudo lumine/care/manage.sh ...)
+#   just box-manage <command> [args...]   (from the admin machine)
 set -euo pipefail
 
 [ "$(id -u)" -eq 0 ] || { echo "manage.sh: run as root" >&2; exit 1; }
