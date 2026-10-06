@@ -121,6 +121,10 @@ just generations
 > other workload follows the same `<name>-deploy` / `-status` / `-logs` /
 > `-secrets` shape — run `just --list` for the full set.
 
+> The `box-*` recipes are the exception: they run **on lumine** (the
+> Raspberry Pi), from its own clone of this repo, not against avocado. See
+> [CARE in a box](care-box.md).
+
 > The `justfile` connects over Tailscale MagicDNS (`avocado`) and disables
 > `known_hosts` checking (`NIX_SSHOPTS`) so deploys don't trip over stale host
 > keys.

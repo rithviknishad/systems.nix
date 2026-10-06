@@ -1,0 +1,51 @@
+# CARE API: gunicorn as in upstream's scripts/start.sh, minus its per-start
+# collectstatic/compilemessages (deploy-backend.sh does those once per
+# build). Loopback only: nginx is the sole client. Installed by
+# lumine/provision.sh; see docs/care-box.md.
+[Unit]
+Description=CARE API (gunicorn)
+PartOf=care.target
+# Starting after beat's start job (= after its migrations) means the API never
+# serves an unmigrated schema; upstream's API 500s until beat catches up.
+After=care-beat.service postgresql.service redis-server.service network-online.target
+Wants=postgresql.service redis-server.service network-online.target
+
+[Service]
+User=care
+Group=care
+# Resolved at start, so a deploy only takes effect on restart.
+WorkingDirectory=/opt/care/backend/current
+EnvironmentFile=/etc/care/care.env
+# Written per build: ADDITIONAL_PLUGS exactly as it was pip-installed.
+EnvironmentFile=/opt/care/backend/current/build.env
+# XDG_CACHE_HOME: fontconfig (weasyprint) wants a writable cache, and $HOME
+# (/opt/care) is read-only to the service.
+Environment=PYTHONUNBUFFERED=1 XDG_CACHE_HOME=/var/cache/care
+CacheDirectory=care
+# --preload imports Django once in the master and forks the workers from it,
+# so they share those pages copy-on-write instead of each loading its own.
+# Access log format = upstream's start.sh (%% is systemd's escaped %).
+ExecStart=/opt/care/backend/current/.venv/bin/gunicorn --config python:config.gunicorn \
+    config.wsgi:application --bind 127.0.0.1:9000 --workers ${GUNICORN_WORKERS} --preload \
+    --access-logformat '%%(h)s %%(l)s %%(t)s "%%(r)s" %%(s)s %%(M)s %%(b)s "%%(f)s" "%%(a)s"' \
+    --access-logfile - --error-logfile -
+Restart=always
+RestartSec=5
+# Measured 2026-10-07: ~210 MB PSS (~370 MB RSS) idle. High = reclaim
+# pressure, Max = OOM kill; headroom is for weasyprint PDF renders. Only
+# enforced once the memory cgroup is on (docs/care-box.md, Gotchas).
+MemoryHigh=450M
+MemoryMax=650M
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6

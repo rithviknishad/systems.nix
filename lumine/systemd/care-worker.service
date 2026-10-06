@@ -1,0 +1,39 @@
+# CARE celery worker: upstream's scripts/celery_worker.sh minus its per-start
+# collectstatic/compilemessages. Runs every ABDM callback and task, so a dead
+# worker shows up as a blocker on the plug's developer page. See
+# care-api.service for the shared settings.
+[Unit]
+Description=CARE celery worker
+PartOf=care.target
+After=care-beat.service postgresql.service redis-server.service network-online.target
+Wants=postgresql.service redis-server.service network-online.target
+
+[Service]
+User=care
+Group=care
+WorkingDirectory=/opt/care/backend/current
+EnvironmentFile=/etc/care/care.env
+EnvironmentFile=/opt/care/backend/current/build.env
+Environment=PYTHONUNBUFFERED=1 XDG_CACHE_HOME=/var/cache/care
+CacheDirectory=care
+ExecStart=/opt/care/backend/current/.venv/bin/celery --app=config.celery_app worker \
+    --max-tasks-per-child=6 --loglevel=info --concurrency=${CELERY_WORKER_CONCURRENCY}
+Restart=always
+RestartSec=5
+# Measured 2026-10-07: ~170 MB PSS (~280 MB RSS) idle; report generation
+# renders PDFs here. See care-api.service.
+MemoryHigh=400M
+MemoryMax=600M
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6

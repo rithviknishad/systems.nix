@@ -182,6 +182,11 @@ Notes:
   this table (including the Access-gated ONVIF console) and shows host and
   cluster stats. See [App gallery](apps.md#security-and-whats-public) for
   exactly what that discloses.
+- `care-box.rithviknishad.dev` is **not** on this tunnel. It's served by the
+  Raspberry Pi lumine through its own tunnel `lumine`
+  (`1e284975-…`, `lumine/cloudflared/config.yml`), so avocado being down
+  doesn't take it offline. Its DNS route was still created from avocado,
+  which holds the Cloudflare login cert. See [CARE in a box](care-box.md).
 
 ### Adding a public service
 

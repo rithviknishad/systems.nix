@@ -832,3 +832,149 @@ apps-logs:
 # One-time: point the public gallery hostname at the tunnel.
 apps-dns:
     cloudflared tunnel route dns avocado apps.rithviknishad.dev
+
+# --- lumine: CARE in a box (https://care-box.rithviknishad.dev) --------------
+# Raspberry Pi 5 on Raspberry Pi OS (no Nix, no k8s): CARE as plain systemd
+# units, configured from lumine/. Unlike everything above, these recipes run
+# ON lumine (from the repo clone at ~/systems.nix, outside any devshell) and
+# use sudo. See docs/care-box.md.
+
+# Packages, cloudflared apt repo, pinned sops + VersityGW binaries, the care
+# user/dirs, Postgres tuning + role. Idempotent: re-run after editing lumine/.
+# Converge lumine's base system (lumine/provision.sh).
+box-provision:
+    sudo lumine/provision.sh
+
+# Kept out of box-provision so upgrades are always deliberate. Kernel and
+# firmware updates take effect on the next reboot (ask before rebooting).
+# apt full-upgrade lumine.
+box-upgrade:
+    sudo apt-get update -q
+    sudo DEBIAN_FRONTEND=noninteractive apt-get -y -q full-upgrade
+
+# Decrypts with lumine's SSH host key into root-only files, one per consumer:
+# /etc/care/care.env (care-*), /etc/care/versitygw.env, the tunnel creds.
+# Values are never printed; the env files are checked through systemd's own
+# parser. Restarts whatever consumes a changed file.
+# Decrypt lumine's secrets onto the box (lumine/render-secrets.sh).
+box-secrets-render:
+    sudo lumine/render-secrets.sh
+
+# sops re-encrypts to every recipient in .sops.yaml, so avocado and the admin
+# Mac can still read the result. Then: just box-secrets-render.
+# Edit lumine's app secrets (as root, decrypting with the host key).
+box-secrets:
+    sudo env SOPS_AGE_SSH_PRIVATE_KEY_FILE=/etc/ssh/ssh_host_ed25519_key sops secrets/care-box.enc.env
+
+# Defaults to the tracked branch (lumine/care/deploy-backend.sh); a no-op when
+# the running release already is its head with the same plugs + settings.
+# Restarts care.target, which blocks until beat's migrations are done:
+#   just box-deploy                                   # tracked branch head
+#   just box-deploy develop ohcnetwork/care           # another ref/repo
+# Build + roll out the CARE backend (lumine/care/deploy-backend.sh).
+[positional-arguments]
+box-deploy *args:
+    sudo lumine/care/deploy-backend.sh "$@"
+
+# Restart the backend; beat re-runs migrations before API + worker start.
+box-restart:
+    sudo systemctl restart care.target
+
+# Fixtures load only once (demo users + Ohcn@123 passwords, public!); the
+# password step runs every time. See lumine/care/seed-demo.sh.
+# Load CARE's demo fixtures, then set admin's password from BOX_ADMIN_PASSWORD.
+box-seed-demo:
+    sudo lumine/care/seed-demo.sh
+
+# Via the ORM on the box (no admin credentials); clears the cached plug list.
+# Register the ABDM MFE (plug_config `abdm`) for the care-box origin.
+box-register-abdm:
+    sudo lumine/care/manage.sh shell -v 0 < lumine/care/register_abdm.py
+
+# Mirrors avocado's versitygw-buckets Job (minus TeleICU's bucket).
+# Create CARE's buckets + the care-facility policy on VersityGW. Idempotent.
+box-buckets:
+    sudo lumine/care/buckets.sh
+
+# Show lumine's CARE units, the running revisions and memory.
+box-status:
+    systemctl list-units --no-pager --all 'care*' postgresql@17-main.service redis-server.service nginx.service versitygw.service cloudflared-lumine.service
+    @for d in backend fe abdm-fe; do echo "--- $d: $(readlink /opt/care/$d/current)"; grep -E '^(repo|ref|sha)=' /opt/care/$d/current/REVISION 2>/dev/null || echo "not deployed"; done
+    @free -h
+
+# Follow the journal of every care-* unit, or one: just box-logs care-beat.
+box-logs unit="care-*":
+    journalctl -f -u '{{unit}}'
+
+# Interactive commands get a pty: just box-manage createsuperuser.
+# Run manage.py as care with the units' environment (lumine/care/manage.sh).
+[positional-arguments]
+box-manage *args:
+    sudo lumine/care/manage.sh "$@"
+
+box_ssh := "rithviknishad@lumine"
+box_origin := "https://care-box.rithviknishad.dev"
+
+# Run ON AVOCADO: the Vite build needs ~4 GB of RAM and lumine has 2 GB, while
+# the output is architecture-independent static files. Builds care_fe at the
+# head of `ref` with the care-box origin baked in (same .env.local as
+# care-fe-image), and the ABDM MFE from k8s/care/abdm-fe at the sha pinned in
+# additional-plugs.json (identical to avocado's: the MFE bakes in no origin).
+# Copies the files out of the images and rsyncs them to lumine as
+# /opt/care/{fe,abdm-fe}/<id>/{html,REVISION}, then flips each `current`
+# symlink; nginx serves the new files on the next request. Keeps the two
+# previous builds of each (rollback: `sudo ln -sfn <id> /opt/care/fe/current`
+# on lumine). Skips a half whose <id> (sha + build config) is already live.
+# Build care_fe + the ABDM MFE for care-box and ship them to lumine.
+box-fe ref="bodhi/questionnaire-actions" repo="ohcnetwork/care_fe":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    envlocal='REACT_CARE_API_URL={{box_origin}}\nREACT_MFE_REGISTERED_COMPONENTS=AddFacilitySheet\n'
+    sha=$(git ls-remote https://github.com/{{repo}} refs/heads/{{ref}} | cut -f1)
+    [ -n "$sha" ] || { echo "no branch {{ref}} in {{repo}}" >&2; exit 1; }
+    abdm=$(python3 -c 'import json; print(next(p for p in json.load(open("k8s/care/additional-plugs.json")) if p["name"] == "abdm")["package_name"].split("@")[1].split("#")[0])')
+    fe_id=${sha:0:12}-$(printf "$envlocal" | sha256sum | cut -c1-8)
+    abdm_id=${abdm:0:12}-$(cat k8s/care/abdm-fe/* | sha256sum | cut -c1-8)
+    live() { [ "$(ssh {{box_ssh}} readlink "/opt/care/$1/current" || true)" = "$2" ]; }
+    out=$(mktemp -d)
+    trap 'rm -rf "$out"' EXIT
+    # Static files out of an image, without running it.
+    extract() { local cid; cid=$(docker create "$1"); docker cp "$cid:$2" "$3"; docker rm "$cid" >/dev/null; }
+    # Upload as root-owned read-only files, then flip `current` + prune.
+    ship() {
+        ssh {{box_ssh}} sudo install -d -m 755 "/opt/care/$1"
+        rsync -a --delete --rsync-path='sudo rsync' --chown=root:root --chmod=D755,F644 \
+            "$3/" "{{box_ssh}}:/opt/care/$1/$2/"
+        ssh {{box_ssh}} sudo sh -seu -- "$1" "$2" <<'EOF'
+    d=/opt/care/$1; id=$2
+    ln -sfn "$id" "$d/current.new"
+    mv -T "$d/current.new" "$d/current"
+    find "$d" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %f\n' | sort -rn | cut -d' ' -f2 |
+        grep -vx "$id" | tail -n +3 | while read -r old; do rm -rf "${d:?}/$old"; echo "pruned $1/$old"; done
+    EOF
+        echo "care-box $1 -> $2"
+    }
+    if live fe "$fe_id"; then
+        echo "fe up to date: {{repo}}@{{ref}} = $fe_id"
+    else
+        src={{care_build}}/care_fe-box
+        rm -rf "$src"
+        mkdir -p {{care_build}}
+        git clone -q --depth 1 --branch {{ref}} https://github.com/{{repo}} "$src"
+        [ "$(git -C "$src" rev-parse HEAD)" = "$sha" ] || { echo "{{ref}} moved during the build; re-run" >&2; exit 1; }
+        printf "$envlocal" >"$src/.env.local"
+        docker build -t care-fe:box "$src"
+        mkdir -p "$out/fe/html"
+        extract care-fe:box /usr/share/nginx/html/. "$out/fe/html/"
+        printf 'repo={{repo}}\nref={{ref}}\nsha=%s\nbuilt=%s\n' "$sha" "$(date -Iseconds)" >"$out/fe/REVISION"
+        ship fe "$fe_id" "$out/fe"
+    fi
+    if live abdm-fe "$abdm_id"; then
+        echo "abdm-fe up to date: care-abdm@$abdm = $abdm_id"
+    else
+        docker build -t care-abdm-fe:box --build-arg CARE_ABDM_REF="$abdm" k8s/care/abdm-fe
+        mkdir -p "$out/abdm-fe/html"
+        extract care-abdm-fe:box /usr/share/nginx/html/mfe-plugs "$out/abdm-fe/html/"
+        printf 'repo=ohcnetwork/care-abdm\nsha=%s\nbuilt=%s\n' "$abdm" "$(date -Iseconds)" >"$out/abdm-fe/REVISION"
+        ship abdm-fe "$abdm_id" "$out/abdm-fe"
+    fi

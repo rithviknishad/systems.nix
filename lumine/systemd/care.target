@@ -1,0 +1,11 @@
+# The CARE backend on lumine as one unit: `systemctl restart care.target`
+# restarts beat, API and worker together (they run the same release, and beat
+# applies its migrations before the other two start). Installed by
+# lumine/provision.sh, enabled by lumine/care/deploy-backend.sh once a release
+# exists. See docs/care-box.md.
+[Unit]
+Description=CARE backend (beat + API + worker)
+Wants=care-beat.service care-api.service care-worker.service
+
+[Install]
+WantedBy=multi-user.target

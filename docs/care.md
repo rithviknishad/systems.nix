@@ -14,6 +14,10 @@ layer (gateway middleware, device plugs, devices micro-frontend) and mock
 devices to exercise it, across two namespaces: `care` (`k8s/care/`) and
 `care-teleicu` (`k8s/care-teleicu/`).
 
+A second, independent instance without TeleICU runs on the Raspberry Pi
+**lumine** at `care-box.rithviknishad.dev`, on plain systemd instead of k8s:
+see [CARE in a box](care-box.md).
+
 ## Public hostnames
 
 Flattened to a single label on purpose: Cloudflare's free Universal SSL cert

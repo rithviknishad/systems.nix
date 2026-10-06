@@ -1,0 +1,48 @@
+# VersityGW: S3 over a plain directory, as on avocado (k8s/care/care.yaml).
+# Each bucket is a directory under /var/lib/care/s3 and each object an
+# ordinary file, with S3 metadata in user.* xattrs (ext4 has them). Loopback
+# only: CARE talks to it directly, browsers through nginx's /care-uploads and
+# /care-facility paths. Buckets + policies: `just box-buckets`. Installed and
+# enabled by lumine/provision.sh; see docs/care-box.md.
+[Unit]
+Description=VersityGW S3 gateway (CARE uploads + facility files)
+After=network.target
+# Rendered by lumine/render-secrets.sh, which also starts this unit.
+ConditionPathExists=/etc/care/versitygw.env
+
+[Service]
+User=versitygw
+Group=versitygw
+# Root access key/secret = CARE's BUCKET_KEY/BUCKET_SECRET, and nothing else:
+# the gateway never sees the Django/DB/ABDM secrets.
+EnvironmentFile=/etc/care/versitygw.env
+# Must equal BUCKET_REGION: the gateway checks the SigV4 credential scope,
+# and a SigV2-capable region like us-east-1 breaks presigned URLs
+# (docs/care.md, "Object storage").
+Environment=VGW_REGION=ap-south-1
+StateDirectory=care/s3
+StateDirectoryMode=0750
+ExecStart=/usr/local/bin/versitygw --port 127.0.0.1:7070 --health /health posix /var/lib/care/s3
+Restart=always
+RestartSec=5
+# Measured 2026-10-07: ~23 MB PSS idle; uploads stream through 1 MiB
+# buffers. Enforced once the memory cgroup is on (docs/care-box.md).
+MemoryHigh=128M
+MemoryMax=256M
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

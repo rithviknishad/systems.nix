@@ -1,0 +1,49 @@
+# CARE celery beat, which also owns DB migrations: upstream's
+# scripts/celery_beat.sh as ExecStartPre steps. compilemessages is done once
+# per build by deploy-backend.sh instead. See care-api.service for the shared
+# settings.
+[Unit]
+Description=CARE celery beat (runs migrations first)
+PartOf=care.target
+After=postgresql.service redis-server.service network-online.target
+Wants=postgresql.service redis-server.service network-online.target
+
+[Service]
+User=care
+Group=care
+WorkingDirectory=/opt/care/backend/current
+EnvironmentFile=/etc/care/care.env
+EnvironmentFile=/opt/care/backend/current/build.env
+Environment=PYTHONUNBUFFERED=1 XDG_CACHE_HOME=/var/cache/care
+CacheDirectory=care
+# Upstream beat writes its schedule into the cwd, which is read-only here.
+StateDirectory=care/beat
+ExecStartPre=/opt/care/backend/current/.venv/bin/python manage.py migrate --noinput
+ExecStartPre=/opt/care/backend/current/.venv/bin/python manage.py sync_permissions_roles
+ExecStartPre=/opt/care/backend/current/.venv/bin/python manage.py sync_valueset
+ExecStart=/opt/care/backend/current/.venv/bin/celery --app=config.celery_app beat \
+    --loglevel=info --schedule=%S/care/beat/celerybeat-schedule
+# The API and worker wait for this start job, and the first migrate +
+# sync_valueset on an empty DB takes minutes on a Pi.
+TimeoutStartSec=1h
+# A failed migration is retried like a crash-looping pod would be.
+Restart=always
+RestartSec=10
+# Measured 2026-10-07: ~120 MB PSS for beat, ~240 MB for the first migrate
+# on an empty DB (ExecStartPre runs in this cgroup). Generous Max, because an
+# OOM-killed migration would just retry and die forever. See care-api.service.
+MemoryHigh=350M
+MemoryMax=600M
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6

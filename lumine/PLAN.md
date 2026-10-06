@@ -38,7 +38,7 @@ you go.
 | Storage | only the SD card `mmcblk0` 58 GB (`p1` vfat `/boot/firmware`, `p2` ext4 `/`, root `PARTUUID=11c03eb1-02`); zram swap 2 GB |
 | SSD | **not detected**: no NVMe, nothing on USB, external PCIe `pcie@1000110000` is `disabled`, no HAT EEPROM |
 | Bootloader | EEPROM 2026-05-11 (update to 2026-05-26 available); `BOOT_ORDER=0xf461` (SD → NVMe → USB → retry), `NET_INSTALL_AT_POWER_ON=1` |
-| Kernel cmdline | includes `cgroup_disable=memory` (systemd `MemoryMax=` is ignored until re-enabled) |
+| Kernel cmdline | `/proc/cmdline` has `cgroup_disable=memory`, **prepended by the firmware** (it is not in `cmdline.txt`); systemd `MemoryMax=` is ignored until re-enabled |
 | Power | EXT5V 5.11 V, `usb_max_current_enable=1`, not throttled |
 | Installed | nothing relevant: no nginx/postgres/redis/cloudflared/git/node |
 
@@ -121,10 +121,12 @@ The implementing agent runs on lumine itself, in the repo clone at
   (`~/.cloudflared/cert.pem`). Already done for `care-box` (status log).
 - Destructive / live-impacting steps still need the user's explicit OK:
   reboots (incl. the cgroup change below), wiping data, EEPROM.
-- **Memory cgroup**: the SD's `/boot/firmware/cmdline.txt` still has
-  `cgroup_disable=memory`, so `MemoryMax=` is ignored. Replacing it with
-  `cgroup_enable=memory` (single line!) + a reboot is needed before the
-  per-unit memory limits mean anything. Ask before rebooting.
+- **Memory cgroup**: the firmware prepends `cgroup_disable=memory` to the
+  kernel command line (see `/proc/cmdline`; it is *not* in
+  `/boot/firmware/cmdline.txt`), so `MemoryMax=` is ignored. Appending
+  `cgroup_enable=memory` to `cmdline.txt` (single line!; the later argument
+  wins) + a reboot is needed before the per-unit memory limits mean
+  anything. Ask before rebooting.
 
 ## Phase 0: SSD + boot from SSD  (DEFERRED: user will revisit later)
 
@@ -160,9 +162,9 @@ while both are attached):
    nothing else, as `/proc`, `/sys`, `/dev`, `/run` and `/tmp` are separate mounts).
 4. On the **SSD copy only**: replace the old PARTUUIDs in
    `/mnt/ssd/boot/firmware/cmdline.txt` (`root=`) and `/mnt/ssd/etc/fstab`
-   with the SSD's (`blkid`), and in `cmdline.txt` replace
-   `cgroup_disable=memory` with `cgroup_enable=memory`; it's a single line,
-   so keep it a single line.
+   with the SSD's (`blkid`), and append `cgroup_enable=memory` to
+   `cmdline.txt` (the firmware injects `cgroup_disable=memory` ahead of it);
+   it's a single line, so keep it a single line.
 5. Double-check before any reboot: `blkid` of the SSD partitions matches
    every PARTUUID referenced by the SSD's `cmdline.txt` and `fstab`.
 
@@ -214,8 +216,8 @@ until Phase 1 is done).
 - Clone the backend ref; build a venv with the Pipfile's packages (use the
   `pipenv` lock → requirements, or `pipenv install --deploy` into the venv);
   install the plugs the same way upstream's `install_plugins.py` does.
-  `ADDITIONAL_PLUGS` = avocado's **minus** the three TeleICU plugs (plus or
-  minus `abdm`, see decision 2); build arg and runtime env must match.
+  `ADDITIONAL_PLUGS` = avocado's **minus** the three TeleICU plugs (so just
+  `abdm`, see decision 3); build arg and runtime env must match.
 - Env file (`/etc/care/care.env`, root-owned, `0600`, systemd `EnvironmentFile=`)
   modeled on avocado's `care-backend-env` ConfigMap, with
   `https://care-box.rithviknishad.dev` as `CURRENT_DOMAIN`, `BACKEND_DOMAIN`,
@@ -334,3 +336,172 @@ zram swap (2 GB) is the safety net; consider folding beat into the worker
     the uncommitted files above; the gitignored plaintext secret files on
     avocado were deliberately NOT copied). `git` installed on lumine.
   - **Next: Phase 1** (base packages), on the SD card.
+- 2026-10-07 (agent on lumine): **Phase 1 done** (base system, SD card).
+  - `lumine/provision.sh` (`just box-provision`): idempotent, a re-run is
+    a no-op. Tuning in `lumine/postgresql/care-box.conf`. Upgrades are a
+    separate, deliberate `just box-upgrade`.
+  - `apt full-upgrade` (135 pkgs): kernel 6.18.50 + firmware installed but
+    **only active after the next reboot** (still running 6.18.34).
+    `rpi-eeprom` 28.33 keeps the boot-time auto-update minimum at 2025-05-08,
+    so `rpi-eeprom-update.service` won't flash (bootloader stays 2026-05-11).
+    `config.txt`, `cmdline.txt` and the EEPROM config are byte-identical.
+  - Installed: postgresql-17 17.11, redis-server 8.0.2, nginx 1.26.3
+    (Debian's default site disabled, so nothing listens on :80 yet),
+    cloudflared 2026.10.0 (Cloudflare apt repo, signing-key fingerprint
+    pinned; not enabled), sops 3.13.1 + VersityGW 1.8.0 in `/usr/local/bin`
+    (sha256 pinned in the script), just 1.40, awscli 2.23.6, the
+    Dockerfile's build deps plus `python3-venv`/`python3-dev`, weasyprint
+    libs (DejaVu fonts come in as deps).
+  - `care` system user (home `/opt/care`); `/opt/care` care 755,
+    `/var/lib/care` root 755, `/etc/care` root 700.
+  - Postgres: `shared_buffers=128MB`, `effective_cache_size=512MB`,
+    `work_mem=4MB`, `max_connections=30`, `jit=off`,
+    `checkpoint_timeout=15min`. Role `care` (not superuser) owns db `care`;
+    peer auth over the socket works, and `CREATE EXTENSION pg_trgm` (the
+    only extension CARE's migrations create; trusted) works as `care`.
+  - Only sshd/tailscaled listen beyond loopback; postgres + redis are
+    loopback-only. sops decrypts both lumine secrets with the host key.
+  - Findings: (1) the memory cgroup is disabled by the firmware, not
+    `cmdline.txt` (corrected above). (2) The Cursor server + agents take
+    ~850 MB RSS while a session is open; ~970 MB available after Phase 1.
+    (3) `config.settings.deployment` hard-codes `EMAIL_USE_TLS = True`, and
+    Mailpit is plain SMTP, so mail fails at STARTTLS as configured; CARE's
+    vars are `EMAIL_HOST/PORT/USER/PASSWORD/FROM` (decide in Phase 2).
+    (4) deployment settings set Secure session/CSRF cookies, so Django
+    admin over plain `http://lumine:8000` can't log in (decide in Phase 4).
+  - **Next: Phase 2** (backend).
+- 2026-10-07: **Phase 2 done** (backend), deployed
+  `rithviknishad/care@82ae319bf02e` (branch head) + `abdm@969a278`.
+  - User decisions: (a) email = a settings module shipped from
+    `lumine/care/care_box_settings.py` (`config.settings.care_box` =
+    deployment + `EMAIL_USE_TLS` from env); (b) the cgroup/kernel reboot
+    happens **after Phase 4**, as a "comes back on boot" test.
+  - The env rendering planned for Phase 5 landed here (the backend can't
+    start without it): `just box-env` renders `/etc/care/care.env` (root
+    0600, 36 values; `BOX_*` keys excluded) and verifies through systemd's
+    own parser that every value round-trips (key names only). `just
+    box-secrets` edits the sops file with the host key.
+  - `just box-deploy` (`lumine/care/deploy-backend.sh`) builds releases
+    under `/opt/care/backend/<sha12>-<cfg8>` + `current` symlink, mirroring
+    the Dockerfile (venv, `pipenv install --deploy`, `install_plugins.py`),
+    with collectstatic (193 copied / 905 post-processed, same as avocado
+    without token_display) + compilemessages + compileall once per build.
+    `REVISION` + `build.env` (the pip-installed `ADDITIONAL_PLUGS`, loaded
+    by the units) per release. Plugs = avocado's JSON minus TeleICU, derived
+    at deploy time. Re-run = "up to date"; keeps 2 old releases.
+  - Units: `care.target` → `care-beat` (migrate, sync_permissions_roles,
+    sync_valueset as ExecStartPre; schedule in `/var/lib/care/beat`),
+    `care-api` (gunicorn 127.0.0.1:9000, 2 workers, `--preload`),
+    `care-worker` (concurrency 1). API + worker are ordered after beat's
+    start job, so they only start on a migrated schema. Hardened
+    (`ProtectSystem=strict`, ...). `box-restart/status/logs/manage` recipes.
+  - Verified: `/ping/` 200 `{"status": "OK"}`, `/api/v1/plug_config/` 200,
+    `/api/abdm/health` 200 (plug loaded), `abdm` in INSTALLED_APPS, runtime
+    plugs == build plugs, peer-auth DB, celery `inspect ping` pong + a task
+    round-trip SUCCESS, beat dispatched `abdm retry share items` on schedule,
+    `sendtestemail` accepted by Mailpit (plain SMTP + AUTH). Warm requests
+    ~1.5 ms.
+  - Memory (`free -h` sampled every 5 s): first migrate + sync_valueset
+    took ~2.5 min with ≥ 810 MB available; the peak was the pip build
+    (358 MB available, 562 MB zram swap). Idle PSS: API 208 MB, worker
+    171 MB, beat 118 MB, postgres 30 MB; Cursor server + agents ~495 MB.
+    Limits set from that (API 450M/650M, worker 400M/600M, beat 350M/600M,
+    High/Max), not enforced until the cgroup reboot.
+  - Found + fixed: with `--preload`, Django's
+    `disable_existing_loggers: True` silenced gunicorn (no access log, no
+    WORKER TIMEOUT); `care_box.py` re-enables its two loggers. Celery's
+    "ready"/"beat: Starting" lines are suppressed the same way upstream
+    (left as-is, same as avocado).
+  - **Next: Phase 3** (frontend, built on avocado).
+- 2026-10-07: **Phase 3 done** (frontend). `just box-fe` (runs on
+  avocado; the user ran lumine's justfile there with `just -f ... -d .`,
+  nothing committed yet) built care_fe `bodhi/questionnaire-actions@8c4edae`
+  with `.env.local` = care-box origin + `AddFacilitySheet`, and the ABDM MFE
+  from `k8s/care/abdm-fe` at `969a278` (identical to avocado's; it bakes
+  in no origin). Shipped as root-owned 644 files to
+  `/opt/care/fe/8c4edae0c635-a2396882/` and
+  `/opt/care/abdm-fe/969a27839c02-eb5d3de9/`, each `{html/, REVISION}` (so
+  build metadata stays out of the web root) + a `current` symlink; keeps two
+  old builds. Verified on lumine: the origin is in the bundle,
+  `careapi.ohc.network` (upstream's `.env` default) is nowhere,
+  `AddFacilitySheet` is registered, and the MFE's `remoteEntry.js` uses the
+  `/mfe-plugs/abdm/` base. Not served yet (nginx is Phase 4).
+  - **Next: Phase 4** (VersityGW + buckets, nginx, tunnel).
+- 2026-10-07: **Phase 4 done**: **care-box is public** at
+  `https://care-box.rithviknishad.dev`.
+  - User decision: **no Django admin** for now (not routed anywhere; the
+    SPA owns `/admin/*`). If needed later: SSH tunnel to `127.0.0.1:9000`
+    (documented), since Secure cookies rule out plain http on the LAN.
+  - Secrets: `lumine/care/render-env.sh` → `lumine/render-secrets.sh`
+    (`just box-env` → `just box-secrets-render`), now one root-0600 file
+    per consumer: `/etc/care/care.env`, `/etc/care/versitygw.env` (only the
+    gateway root creds = BUCKET_KEY/SECRET), `/etc/cloudflared/<id>.json`.
+    Restarts consumers of changed files.
+  - `versitygw.service` (static user `versitygw`, `127.0.0.1:7070`, posix
+    over `/var/lib/care/s3` 0750, `VGW_REGION=ap-south-1`) + `just
+    box-buckets` (= avocado's Job minus `teleicu-gateway`; idempotent).
+  - nginx `lumine/nginx/care-box.conf` on 127.0.0.1:80 (provision runs
+    `nginx -t`, restores the old site on failure): routes as in docs/care-box.md;
+    care_fe's headers/caching for `/`, abdm-fe's rules for the MFE, `Host`
+    kept + streaming for the buckets, `(/|$)` so bucket-level paths hit the
+    gateway.
+  - `cloudflared-lumine.service` (DynamicUser, `LoadCredential=`,
+    `--no-autoupdate`, `StartLimitIntervalSec=0` + `RestartSec=10`): 4
+    QUIC connections (maa04/bom11/bom12). Ingress via 127.0.0.1 (nginx is
+    IPv4-loopback only).
+  - Verified through Cloudflare: SPA + client routes + assets 200,
+    `/api/v1/plug_config/` + `/api/abdm/health` 200, `remoteEntry.js` 200
+    `no-cache`, `/admin/` = SPA; with CARE's own client config presigned
+    PUT/GET 200 on both buckets, SigV4 (`X-Amz-Algorithm`), Content-Type
+    round-trips (xattrs), anonymous GET 403 uploads / 200 facility, LIST 403
+    both (test objects deleted). Edge cert: Universal SSL
+    `*.rithviknishad.dev`, valid to 2026-12-29.
+  - Memory: versitygw ~23 MB, cloudflared ~37 MB, nginx ~5 MB PSS; limits
+    128M/256M on the first two. API warmed up to ~309 MB PSS.
+  - Found: CARE's login rate limit keys on REMOTE_ADDR = 127.0.0.1 here (all
+    clients share one bucket; same on avocado via Traefik), left as is,
+    documented. `Python-urllib` UA gets Cloudflare 1010 (requests/curl ok).
+  - **Reboot test (approved: "after Phase 4")**: appended
+    `cgroup_enable=memory` to `/boot/firmware/cmdline.txt` (backup:
+    `cmdline.txt.bak-pre-cgroup`) and scheduled a reboot, which also
+    activates kernel 6.18.50. **Post-reboot checks still to do**: `uname -r`
+    = 6.18.50; `memory` in `/sys/fs/cgroup/cgroup.controllers`;
+    `systemctl --failed` empty; care.target/versitygw/cloudflared-lumine
+    active; `memory.max` of the care units = their `MemoryMax=`; the public
+    checks above; `free -h` without an agent session. Recovery if it
+    doesn't boot: SD card into another machine, restore
+    `cmdline.txt.bak-pre-cgroup`.
+  - **Next: Phase 5** (seed demo fixtures, rotate `admin`, register the ABDM
+    plug_config).
+- 2026-10-07: **reboot test passed** (closes Phase 4). Kernel
+  6.18.50+rpt-rpi-2712; `/proc/cmdline` has `cgroup_disable=memory` (firmware)
+  then `cgroup_enable=memory` (ours), and `memory` is in
+  `cgroup.controllers`, so every unit's `memory.high`/`memory.max` now
+  equals its `MemoryHigh=`/`MemoryMax=`. `systemctl --failed` empty, no
+  errors this boot; EEPROM still 2026-05-11. Boot order as designed:
+  versitygw + tunnel up first (4 connections within 2 s), beat's migrate ("No
+  migrations to apply") took 16 s, API + worker started the instant beat's
+  start job finished. Public checks all 200/403 as before. Memory: the whole
+  stack + OS ~860 MB PSS; the reconnected Cursor session another ~660 MB,
+  so ~1.1 GB is available with no agent connected.
+- 2026-10-07: **Phase 5 done** (seeding).
+  - `just box-seed-demo` (`lumine/care/seed-demo.sh`): Faker 38.2.0 (pin
+    read from the release's `Pipfile.lock`, deps constrained to the lock)
+    into a throwaway `/tmp` dir on `PYTHONPATH` (release venv untouched),
+    `load_fixtures` with `DJANGO_DEBUG=true` for that process only (the
+    fixture context checks `settings.DEBUG`), then `admin`'s password
+    <- `BOX_ADMIN_PASSWORD` via a pipe into `manage.py shell -c` (never argv/env).
+    Idempotent: skips the load when `care-admin` exists (a re-load duplicates
+    data and resets admin to admin/admin); re-run printed "already set".
+    `manage.sh` gained `--setenv=K=V` (non-secret one-offs only).
+  - Seeded in ~30 s: 2 facilities, 10 patients, 10 encounters, 10 users,
+    DB 31 MB; min 297 MB available / 412 MB swap with the agent connected.
+  - `just box-register-abdm` (ORM upsert + clears the cached plug list):
+    created, re-run "unchanged".
+  - Verified through Cloudflare: admin/admin 401; admin + BOX_ADMIN_PASSWORD
+    200 (superuser); demo `care-doctor` 200; public plug_config lists abdm at
+    the care-box MFE URL; `/api/abdm/gateway/status` 200 `ok: true`.
+  - **Not done, on purpose:** `abdm_register_bridge_url` (not even
+    `--dry-run`); ABDM callbacks still go to avocado. Demo users keep the
+    public `Ohcn@123` (decision 5 rotates only admin).
+  - **Next: Phase 6** (backups + offsite copy, Gatus, Homepage, finish docs).

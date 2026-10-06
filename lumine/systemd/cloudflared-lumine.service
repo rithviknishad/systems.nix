@@ -1,0 +1,45 @@
+# Cloudflare Tunnel `lumine`: the only public way in. It dials out to
+# Cloudflare, so nothing listens publicly on the box. Ingress rules live in
+# /etc/cloudflared/config.yml (lumine/cloudflared/config.yml). Installed and
+# enabled by lumine/provision.sh; see docs/care-box.md.
+[Unit]
+Description=Cloudflare Tunnel lumine (care-box.rithviknishad.dev)
+After=network-online.target nginx.service
+Wants=network-online.target
+# Rendered by lumine/render-secrets.sh, which also starts this unit.
+ConditionPathExists=/etc/cloudflared/1e284975-9221-4b79-8242-0722c96294ed.json
+# Retry forever, like avocado's tunnel (modules/cloudflared.nix explains the
+# 2026-09-16 outage): cloudflared exits within a second when DNS is down at
+# startup, and systemd's default start limit would then give up for good.
+StartLimitIntervalSec=0
+
+[Service]
+DynamicUser=yes
+# The credentials file is root-only; systemd hands the unprivileged
+# service a private copy at %d (= $CREDENTIALS_DIRECTORY).
+LoadCredential=tunnel.json:/etc/cloudflared/1e284975-9221-4b79-8242-0722c96294ed.json
+# --no-autoupdate: apt (Cloudflare's repo) owns updates.
+ExecStart=/usr/bin/cloudflared --no-autoupdate --config /etc/cloudflared/config.yml \
+    tunnel run --credentials-file %d/tunnel.json
+Restart=always
+RestartSec=10
+# Measured 2026-10-07: ~37 MB PSS idle with 4 QUIC connections. Enforced once
+# the memory cgroup is on (docs/care-box.md).
+MemoryHigh=128M
+MemoryMax=256M
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+
+[Install]
+WantedBy=multi-user.target
