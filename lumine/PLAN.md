@@ -23,7 +23,8 @@ you go.
   `/*` → care_fe static files (SPA fallback to `index.html`).
 - Plain systemd services: PostgreSQL, Redis, nginx, gunicorn (API), celery
   worker, celery beat, VersityGW (S3 over a local directory), cloudflared.
-- Boots from an SSD; no SD card needed.
+- Boots from an SSD; no SD card needed. **Deferred** (see Phase 0): for now
+  everything runs on the SD card.
 
 ## Host facts (probed 2026-10-06)
 
@@ -41,34 +42,95 @@ you go.
 | Power | EXT5V 5.11 V, `usb_max_current_enable=1`, not throttled |
 | Installed | nothing relevant: no nginx/postgres/redis/cloudflared/git/node |
 
-## Decisions
+## Decisions (all answered by the user, 2026-10-06)
 
-Answered:
-- Platform: Raspberry Pi OS + systemd units (not NixOS, not containers), as
-  proposed. Re-confirm before Phase 1 if in doubt.
-- Phase 0 (SSD boot) comes before anything else.
-
-Still open (ask the user at the start of Phase 1, all at once):
-1. **OS**: stay on Raspberry Pi OS with config in this repo applied over SSH
-   (recommended) vs NixOS via `nixos-raspberrypi` (`nixitup` skill).
-2. **ABDM plug**: include or not. ABDM has **one bridge URL per client id**,
-   so registering care-box would take callbacks away from avocado.
-   Recommendation: leave it out (or include it but never register the bridge).
-3. **Refs**: same as avocado (`docs/care.md` → "Currently deployed"):
-   backend `rithviknishad/care@rithviknishad/bodhi/ENG-737-test-fixtures`,
-   SPA `ohcnetwork/care_fe@bodhi/questionnaire-actions`. Pin to commit SHAs or
-   track the branches?
-4. **Data**: demo (`load_fixtures`) or production-style (geo organizations
-   + a real superuser).
-5. **Django admin**: the SPA owns `/admin/*`, so on a single origin the
-   Django admin can't be public there. Suggest LAN/Tailscale only. Should
-   lumine join the tailnet?
-6. **Email**: point SMTP at avocado's Mailpit, or none.
-7. **Repo layout**: this `lumine/` directory (nginx site, systemd units,
-   provisioning script, env template) + `docs/care-box.md` + `box-*` recipes
+1. **OS**: stay on **Raspberry Pi OS** + plain systemd units (no NixOS, no
+   Docker, no k8s). Config lives in this repo under `lumine/` and is applied
+   to the box.
+2. **SSD**: **deferred**. Build everything on the SD card now; Phase 0 is
+   picked up later. Keep data paths (`/var/lib/postgresql`, `/var/lib/care`,
+   `/opt/care`) plain so the later SD → SSD clone is a straight copy.
+3. **ABDM plug**: **include it** (backend plug + the ABDM MFE at
+   `/mfe-plugs/abdm/`, care_fe built with
+   `REACT_MFE_REGISTERED_COMPONENTS=AddFacilitySheet`, same pinned care-abdm
+   sha as avocado's `k8s/care/additional-plugs.json`).
+   **Do NOT run `abdm_register_bridge_url` on care-box** without asking the
+   user first: ABDM has one bridge URL per client id, and registering
+   care-box takes callbacks away from avocado (`docs/care.md` → ABDM).
+   Set `ABDM_CALLBACK_BASE_URL=https://care-box.rithviknishad.dev` anyway.
+4. **Refs**: **track the branches** (follow their heads on each deploy, no
+   sha pin): backend `rithviknishad/care@rithviknishad/bodhi/ENG-737-test-fixtures`,
+   SPA `ohcnetwork/care_fe@bodhi/questionnaire-actions` (= avocado's, see
+   `docs/care.md` → "Currently deployed"). Record the deployed sha somewhere
+   inspectable (e.g. `/opt/care/backend/REVISION`) so "what's running" is
+   answerable. The care-abdm plug stays sha-pinned (both halves in lockstep).
+5. **Data**: **demo fixtures** (`load_fixtures`), then change the weak
+   `admin`/`admin` password (the secret has `BOX_ADMIN_PASSWORD` for this).
+6. **Django admin**: **tailnet/LAN only**, never on the public origin (the
+   SPA owns `/admin/*`). E.g. a second nginx `server` on `lumine:8000` (or
+   gunicorn's port) bound so it's reachable via `tailscale0`/LAN only; it is
+   NOT in the cloudflared ingress.
+7. **Tailscale**: **done** (see status log). lumine = `100.67.15.72`,
+   MagicDNS name `lumine` / `lumine.orthrus-bass.ts.net`.
+8. **Email**: avocado's **Mailpit** over the tailnet: host `avocado`
+   (`100.123.72.40`), port `1025`, user `csaas`, AUTH required, **no TLS**
+   (`EMAIL_USE_TLS`/`EMAIL_USE_SSL` off). Password = `EMAIL_PASSWORD` in the
+   secret. Check CARE's settings for the exact env var names
+   (`EMAIL_HOST_PASSWORD` etc., `config/settings/base.py`) and map
+   accordingly. Verified reachable from lumine: TCP `avocado:1025` OK.
+9. **Repo layout**: `lumine/` (nginx site, systemd units, provisioning
+   script, env template, this plan) + `docs/care-box.md` + `box-*` recipes
    in the `justfile`.
 
-## Phase 0: SSD + boot from SSD
+## Working ON lumine (agent running on the Pi)
+
+The implementing agent runs on lumine itself, in the repo clone at
+`~/systems.nix`. Things that differ from working on avocado/the Mac:
+
+- **No Nix on the box**: no devshell, `nix fmt` or `just eval`. This work
+  shouldn't touch any `.nix` file; if it does, leave validation of that
+  part to avocado. Install the tools needed here with apt / release binaries:
+  `git` (installed), `just` (trixie has it), `sops` (GitHub release
+  `sops-v3.13.1.linux.arm64`, same version as avocado's devshell; verify the
+  checksum), `awscli` if wanted for bucket bootstrap.
+- **Secrets decrypt on the box with its SSH host key** (lumine is a sops
+  recipient as `ssh-ed25519 ...`, see `.sops.yaml`). As root:
+  `sudo env SOPS_AGE_SSH_PRIVATE_KEY_FILE=/etc/ssh/ssh_host_ed25519_key sops -d ...`
+  - `secrets/care-box.enc.env` (dotenv) holds: `DJANGO_SECRET_KEY`,
+    `JWKS_BASE64`, `BUCKET_KEY`, `BUCKET_SECRET`, `ABDM_CLIENT_ID`,
+    `ABDM_CLIENT_SECRET`, `EMAIL_PASSWORD`, `BOX_ADMIN_PASSWORD`. There is
+    **no Postgres password** in it: prefer peer auth over the unix socket
+    (`DATABASE_URL=postgres:///care` as the `care` OS user), so none is
+    needed; add one only if that doesn't work out. Add new keys with
+    `sops set` / `sops edit` as root; never echo values.
+  - `secrets/lumine-cloudflared.json` (sops **binary**: `--input-type binary
+    --output-type binary`) = credentials of tunnel `lumine`
+    `1e284975-9221-4b79-8242-0722c96294ed`.
+  - Decrypted copies go only to root-owned `0600` files outside the repo
+    (`/etc/care/care.env`, `/etc/cloudflared/<tunnel-id>.json`).
+- **No kubeconfig / k8s access from lumine.** The Gatus probe and Homepage
+  tile (Phase 6) are edits in `k8s/` that must be **applied from avocado**
+  (`kubectl kustomize` to validate, then the usual deploy recipe). Write the
+  edits here; ask the user to deploy them from avocado.
+- **care_fe can't be built here** (Vite needs ~4 GB; lumine has 2 GB). The
+  SPA and the ABDM MFE are static, arch-independent builds: make a `just`
+  recipe that the **user runs on avocado** (it has docker, `.build/`, and
+  SSH to lumine over the tailnet), builds both with the care-box origin baked
+  in, extracts the files from the images, and rsyncs them to lumine.
+- DNS/tunnel routing needs the Cloudflare login cert, which stays on avocado
+  (`~/.cloudflared/cert.pem`). Already done for `care-box` (status log).
+- Destructive / live-impacting steps still need the user's explicit OK:
+  reboots (incl. the cgroup change below), wiping data, EEPROM.
+- **Memory cgroup**: the SD's `/boot/firmware/cmdline.txt` still has
+  `cgroup_disable=memory`, so `MemoryMax=` is ignored. Replacing it with
+  `cgroup_enable=memory` (single line!) + a reboot is needed before the
+  per-unit memory limits mean anything. Ask before rebooting.
+
+## Phase 0: SSD + boot from SSD  (DEFERRED: user will revisit later)
+
+Skip this phase for now; start at Phase 1 on the SD card. Note that
+`dtparam=pciex1` is still in `/boot/firmware/config.txt` (PCIe link is
+down; harmless, it only probes an empty port at boot).
 
 Goal: the Pi boots from the SSD, comes back at the same address after every
 reboot, and the SD card can be removed. **Every step that writes the SSD,
@@ -137,6 +199,7 @@ comes back over SSH. Keep the SD card as a cold rescue image (don't reuse it
 until Phase 1 is done).
 
 ## Phase 1: Base system
+- Tailscale: **done** (official apt repo, `tailscaled` enabled).
 - `apt full-upgrade`; install `postgresql-17`, `redis` (or valkey, whatever
   trixie ships), `nginx`, `git`, `gettext` (compilemessages), `libmagic1`
   (python-magic), pango/cairo libs for weasyprint, `libpq-dev` +
@@ -192,20 +255,22 @@ until Phase 1 is done).
   `client_max_body_size 100m` (Cloudflare free-plan cap). Optionally an exact
   `location = /ping/` → backend for health probes.
 - Cloudflare: a **new dedicated tunnel `lumine`** (independent of avocado),
-  credentials sops-encrypted, ingress `care-box.rithviknishad.dev` →
-  `http://localhost:80`, `cloudflared tunnel route dns lumine
-  care-box.rithviknishad.dev`. Give the unit the same "retry forever" restart
+  credentials sops-encrypted (`secrets/lumine-cloudflared.json`, done),
+  ingress `care-box.rithviknishad.dev` → `http://localhost:80`, default
+  `http_status:404`. The DNS route is **done** (CNAME → tunnel). Give the unit the same "retry forever" restart
   policy as avocado's (`modules/cloudflared.nix` explains the outage it fixes).
 - Verify through Cloudflare: SPA 200, `/api/v1/plug_config/` 200,
   presigned PUT/GET 200 on both buckets, anonymous GET 403 on `care-uploads`
   and 200 on `care-facility`, presigned URLs carry `X-Amz-Algorithm`.
 
 ## Phase 5: Secrets + seeding
-- **Fresh** secrets (don't reuse avocado's): Postgres password,
-  `DJANGO_SECRET_KEY`, a stable `JWKS_BASE64`, `BUCKET_KEY`/`BUCKET_SECRET`
-  in `secrets/care-box.enc.yaml` (add a `.sops.yaml` rule; admin key only).
-  A `just` recipe decrypts locally and pipes over SSH into
-  `/etc/care/care.env`; plaintext never touches the repo tree or the chat.
+- **Fresh** secrets (not avocado's) live in `secrets/care-box.enc.env`
+  (exists; contents listed under "Working ON lumine"). Nothing to add
+  unless Postgres peer auth doesn't work out.
+  A `just` recipe on lumine decrypts it with the host key and renders
+  `/etc/care/care.env` (root, `0600`) = non-secret settings (from a
+  committed template in `lumine/`) + the secrets; plaintext never touches
+  the repo tree or the chat.
 - Seed as decided (demo: `pip install Faker==38.2.0` +
   `DJANGO_DEBUG=true python manage.py load_fixtures`, then **change the
   `admin`/`admin` password**; production: `load_govt_organization_csv` +
@@ -248,3 +313,24 @@ zram swap (2 GB) is the safety net; consider folding beat into the worker
   physical (ribbon seating/orientation, board power, drive seating) or a
   drive/board incompatibility. Waiting for the user to check the hardware
   (power off before reseating the ribbon).
+- 2026-10-06: user **deferred the SSD**; build on the SD card for now.
+  Decisions 1-9 answered (see Decisions). The implementation will be done by
+  an agent running on lumine itself.
+- 2026-10-06 (from avocado):
+  - **Tailscale installed + joined**: official apt repo (trixie),
+    `tailscale 1.102.5`, `tailscale up --hostname=lumine` (interactive
+    login, user's account) → `100.67.15.72`. Defaults kept (MagicDNS on:
+    `/etc/resolv.conf` → `100.100.100.100`); public names, `github.com`,
+    `pypi.org`, `region1.v2.argotunnel.com` and `avocado` all resolve.
+    SSH over the tailnet presents the same host key as `lumine.local`.
+    lumine ↔ avocado direct over the LAN; `avocado:1025` (Mailpit) reachable.
+  - **sops**: lumine added as a recipient (`&lumine`, its SSH host ed25519
+    key) for `secrets/care-box.enc.env` and `secrets/lumine-cloudflared.json`
+    only; both re-keyed (`sops updatekeys`). Neither file is committed yet.
+  - **DNS**: `cloudflared tunnel route dns lumine care-box.rithviknishad.dev`
+    → CNAME to tunnel `1e284975-9221-4b79-8242-0722c96294ed`. It serves a
+    Cloudflare "tunnel offline" error until cloudflared runs on lumine.
+  - **Repo copied to lumine** at `~/systems.nix` (git bundle of `main` +
+    the uncommitted files above; the gitignored plaintext secret files on
+    avocado were deliberately NOT copied). `git` installed on lumine.
+  - **Next: Phase 1** (base packages), on the SD card.
