@@ -1,0 +1,4 @@
+# /etc/default/prometheus-nginx-exporter on lumine (lumine/provision.sh).
+# stub_status comes from lumine/nginx/stub-status.conf (loopback only).
+ARGS="--web.listen-address=:9113 \
+--nginx.scrape-uri=http://127.0.0.1:8081/stub_status"

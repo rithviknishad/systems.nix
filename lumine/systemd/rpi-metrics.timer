@@ -1,0 +1,12 @@
+# Every 15 s: throttling and voltage dips are short-lived, and the run is
+# a handful of vcgencmd calls. Installed and enabled by lumine/provision.sh.
+[Unit]
+Description=Refresh Raspberry Pi firmware metrics
+
+[Timer]
+OnBootSec=10s
+OnUnitActiveSec=15s
+AccuracySec=1s
+
+[Install]
+WantedBy=timers.target

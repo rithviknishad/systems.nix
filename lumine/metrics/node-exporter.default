@@ -1,0 +1,19 @@
+# /etc/default/prometheus-node-exporter on lumine (lumine/provision.sh).
+# systemd EnvironmentFile syntax; ExecStart splits $ARGS on whitespace.
+#
+# Beyond the defaults (cpu, meminfo, diskstats, filesystem, netdev, hwmon =
+# cpu_thermal/pwmfan/rpi_volt, thermal_zone + cooling devices, cpufreq, ...):
+#   systemd     unit states, restarts and start times for the box's own units
+#               (the stock NodeSystemdServiceFailed alert needs it)
+#   processes   process/thread counts and states
+#   cpu.info    per-core frequency info
+#   textfile    rpi-metrics.timer (vcgencmd) and the apt timer write here
+# The systemd include list is anchored by node_exporter itself.
+ARGS="--web.listen-address=:9100 \
+--collector.textfile.directory=/var/lib/prometheus/node-exporter \
+--collector.systemd \
+--collector.systemd.unit-include=(care-.+|postgresql@17-main|redis-server|nginx|versitygw|cloudflared-lumine|tailscaled|ssh|rpi-metrics|prometheus-.+)\.service \
+--collector.systemd.enable-restarts-metrics \
+--collector.systemd.enable-start-time-metrics \
+--collector.processes \
+--collector.cpu.info"

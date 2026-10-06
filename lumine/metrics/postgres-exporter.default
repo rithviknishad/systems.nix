@@ -1,0 +1,13 @@
+# /etc/default/prometheus-postgres-exporter on lumine (lumine/provision.sh).
+# Peer auth over the socket as the `prometheus` OS user = the `prometheus`
+# role (pg_monitor, created by provision.sh), so no password. dbname=care so
+# the per-table collectors see CARE's tables; server-wide stats come anyway.
+DATA_SOURCE_NAME='user=prometheus host=/run/postgresql dbname=care sslmode=disable'
+# stat_checkpointer: Postgres 17 moved checkpoint stats out of bgwriter.
+ARGS="--web.listen-address=:9187 \
+--collector.stat_checkpointer \
+--collector.long_running_transactions \
+--collector.postmaster \
+--collector.database_wraparound \
+--collector.stat_activity_autovacuum \
+--collector.statio_user_indexes"

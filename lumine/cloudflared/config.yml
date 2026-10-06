@@ -4,6 +4,10 @@
 # lumine/render-secrets.sh. DNS: care-box.rithviknishad.dev is a CNAME to
 # this tunnel (routed once from avocado, which holds the login cert).
 tunnel: 1e284975-9221-4b79-8242-0722c96294ed
+# Prometheus metrics (requests by status code, HA connections, latency) for
+# avocado's vmagent. Every interface, but the port is tailnet + loopback
+# only (lumine/metrics/care-box-metrics.nft).
+metrics: 0.0.0.0:9300
 ingress:
   # nginx does the path routing. 127.0.0.1 rather than localhost because
   # nginx listens on IPv4 loopback only.

@@ -44,6 +44,12 @@ PACKAGES=(
   # PDF rendering (pango/harfbuzz).
   gettext libmagic1t64 libpango-1.0-0 libpangoft2-1.0-0 libharfbuzz0b
   libharfbuzz-subset0
+  # Metrics for avocado's VictoriaMetrics (lumine/metrics/, docs/care-box.md
+  # "Metrics"). Debian's packages: each runs as `prometheus`, configured
+  # through /etc/default/<name>.
+  nftables prometheus-node-exporter prometheus-node-exporter-collectors
+  prometheus-postgres-exporter prometheus-redis-exporter
+  prometheus-nginx-exporter prometheus-process-exporter
 )
 
 log() { printf '==> %s\n' "$*"; }
@@ -89,6 +95,20 @@ echo "deb [signed-by=$cf_key] https://pkg.cloudflare.com/cloudflared any main" >
 sources_changed=false
 if put "$tmp/cloudflared.list" /etc/apt/sources.list.d/cloudflared.list 644; then
   sources_changed=true
+fi
+
+# --- metrics firewall (before any exporter can start) --------------------------
+# Exporters start the moment apt installs them, listening on every
+# interface, so their tailnet-only rule goes in first (nftables ships with
+# Raspberry Pi OS). Reloading is an atomic replace of our own table only.
+if put "$here/systemd/care-box-firewall.service" /etc/systemd/system/care-box-firewall.service 644; then
+  systemctl daemon-reload
+fi
+systemctl enable --quiet care-box-firewall.service
+if systemctl is-active --quiet care-box-firewall.service; then
+  systemctl reload care-box-firewall.service
+else
+  systemctl start care-box-firewall.service
 fi
 
 missing=()
@@ -190,6 +210,12 @@ if [ "$(pg "SELECT 1 FROM pg_database WHERE datname = 'care'")" != 1 ]; then
   runuser -u postgres -- createdb --owner care care
   log "created database care"
 fi
+# postgres-exporter's role: peer auth as the `prometheus` OS user the Debian
+# package runs it as. pg_monitor = read-only access to every stats view.
+if [ "$(pg "SELECT 1 FROM pg_roles WHERE rolname = 'prometheus'")" != 1 ]; then
+  pg "CREATE ROLE prometheus LOGIN IN ROLE pg_monitor"
+  log "created postgres role prometheus (pg_monitor)"
+fi
 
 # --- systemd units -------------------------------------------------------------
 # Installed here, enabled by whatever needs them first (care.target by
@@ -208,24 +234,60 @@ fi
 # Come up at boot. The first start happens in render-secrets.sh, once their
 # credentials exist (both units are ConditionPathExists= on them).
 systemctl enable --quiet versitygw.service cloudflared-lumine.service
+systemctl enable --quiet --now rpi-metrics.timer
 
 # --- nginx + cloudflared config -------------------------------------------------
 # An invalid site must not take nginx down: test it, and put the previous
 # version back if the test fails.
-site=/etc/nginx/conf.d/care-box.conf
-if [ -f "$site" ]; then cp -p "$site" "$tmp/site.bak"; fi
-if put "$here/nginx/care-box.conf" "$site" 644; then
-  if nginx -t 2>"$tmp/nginx-t"; then
-    systemctl reload nginx
-  else
-    cat "$tmp/nginx-t" >&2
-    if [ -f "$tmp/site.bak" ]; then cp -p "$tmp/site.bak" "$site"; else rm -f "$site"; fi
-    echo "provision.sh: nginx rejected lumine/nginx/care-box.conf; previous site kept" >&2
-    exit 1
+for conf in care-box.conf stub-status.conf; do
+  site=/etc/nginx/conf.d/$conf
+  rm -f "$tmp/site.bak"
+  if [ -f "$site" ]; then cp -p "$site" "$tmp/site.bak"; fi
+  if put "$here/nginx/$conf" "$site" 644; then
+    if nginx -t 2>"$tmp/nginx-t"; then
+      systemctl reload nginx
+    else
+      cat "$tmp/nginx-t" >&2
+      if [ -f "$tmp/site.bak" ]; then cp -p "$tmp/site.bak" "$site"; else rm -f "$site"; fi
+      echo "provision.sh: nginx rejected lumine/nginx/$conf; previous version kept" >&2
+      exit 1
+    fi
   fi
-fi
+done
 if put "$here/cloudflared/config.yml" /etc/cloudflared/config.yml 644; then
   systemctl try-restart cloudflared-lumine.service
 fi
+
+# --- metrics exporters -----------------------------------------------------------
+# Scraped over the tailnet by avocado's vmagent
+# (k8s/monitoring/care-box-scrape.yaml); the firewall above keeps them off
+# the LAN.
+for e in node postgres redis nginx process; do
+  if put "$here/metrics/$e-exporter.default" "/etc/default/prometheus-$e-exporter" 644; then
+    systemctl restart "prometheus-$e-exporter.service"
+  fi
+done
+if put "$here/metrics/process-exporter.yml" /etc/prometheus/process-exporter.yml 644; then
+  systemctl restart prometheus-process-exporter.service
+fi
+if put "$here/metrics/process-exporter.override.conf" \
+  /etc/systemd/system/prometheus-process-exporter.service.d/care-box.conf 644; then
+  systemctl daemon-reload
+  systemctl restart prometheus-process-exporter.service
+fi
+systemctl enable --quiet prometheus-{node,postgres,redis,nginx,process}-exporter.service
+# The collectors package ships timers for hardware this Pi doesn't have (no
+# IPMI, Mellanox NIC, NVMe or SMART-capable disk; their tools aren't even
+# installed). Left enabled, they'd fail and trip NodeSystemdServiceFailed.
+# The apt timer (pending updates, reboot-required) stays.
+for t in smartmon nvme ipmitool-sensor mellanox-hca-temp; do
+  u=prometheus-node-exporter-$t
+  if [ "$(systemctl is-enabled "$u.timer" 2>/dev/null)" != masked ]; then
+    systemctl disable --now --quiet "$u.timer" 2>/dev/null || true
+    systemctl mask --quiet "$u.timer" "$u.service"
+    systemctl reset-failed "$u.service" 2>/dev/null || true
+    log "masked $u (no such hardware)"
+  fi
+done
 
 log "provisioned"

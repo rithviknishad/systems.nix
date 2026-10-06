@@ -1,0 +1,13 @@
+# Raspberry Pi firmware metrics (vcgencmd) for node_exporter's textfile
+# collector: lumine/metrics/rpi-metrics.sh. Root, because vcgencmd needs
+# /dev/vcio. Installed by lumine/provision.sh; see docs/care-box.md.
+[Unit]
+Description=Write Raspberry Pi firmware metrics for node_exporter
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/lib/care-box/metrics/rpi-metrics.sh
+Nice=10
+# Every 15 s, systemd's own Starting/Finished lines would be ~23k journal
+# lines a day on the SD card. notice still lets warnings and failures through.
+LogLevelMax=notice

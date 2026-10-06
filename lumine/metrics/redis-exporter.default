@@ -1,0 +1,7 @@
+# /etc/default/prometheus-redis-exporter on lumine (lumine/provision.sh).
+# `celery` is Celery's default queue (a redis list in db 0): its length is
+# the task backlog the worker hasn't picked up yet.
+ARGS="-web.listen-address=:9121 \
+-redis.addr=redis://127.0.0.1:6379 \
+-check-single-keys=db0=celery \
+-include-system-metrics"

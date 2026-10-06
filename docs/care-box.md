@@ -119,8 +119,9 @@ changes get applied.
   extension CARE's migrations need.
 - **systemd units** from `lumine/systemd/`. A changed unit is installed,
   daemon-reloaded and restarted if it was running.
-- Nothing listens beyond loopback except sshd and tailscaled: Debian's
-  catch-all nginx welcome site is disabled (lumine has no firewall).
+- Nothing listens beyond loopback except sshd, tailscaled and the metrics
+  exporters, and the exporters' ports are tailnet-only
+  ([Metrics](#metrics)). Debian's catch-all nginx welcome site is disabled.
 
 `just box-upgrade` runs `apt full-upgrade`. It's deliberately separate from
 provisioning. Kernel and firmware updates take effect on the next reboot,
@@ -489,6 +490,54 @@ ssh lumine sudo systemctl start versitygw
 just box-start
 just box-health
 ```
+
+## Metrics
+
+The Pi is monitored from avocado's [VictoriaMetrics stack](monitoring.md):
+Grafana → folder **care-box** → **care-box (lumine)**, plus the stock
+**Node Exporter Full** (job `node-exporter`, nodename `lumine`).
+`box-provision` installs Debian's exporters and configures them from
+`lumine/metrics/`:
+
+| Port | Exporter | What |
+|---|---|---|
+| 9100 | `prometheus-node-exporter` | the usual host metrics, plus `systemd` (unit states, restarts, start times), `processes`, `cpu.info`, and hwmon's Pi sensors (`cpu_thermal`, the fan, the RP1 ADC, the firmware's under-voltage alarm). Textfile collector: the Pi metrics below and pending apt upgrades / reboot-required |
+| 9187 | `prometheus-postgres-exporter` | connections, transactions, cache hits, locks, deadlocks, checkpointer (PG 17), per-table stats, DB size. Peer auth as role `prometheus` (`pg_monitor`), so no password |
+| 9121 | `prometheus-redis-exporter` | memory, clients, commands, plus the length of the `celery` list = the **task backlog** |
+| 9113 | `prometheus-nginx-exporter` | `stub_status` from `127.0.0.1:8081` (`lumine/nginx/stub-status.conf`) |
+| 9256 | `prometheus-process-exporter` | per-service CPU, **PSS** memory, IO, process counts: `care-api`, `care-worker`, `care-beat` (by command line), postgres, redis, ... (`CAP_SYS_PTRACE` via a drop-in, to read other users' smaps) |
+| 9300 | cloudflared | `metrics:` in the tunnel config: responses by status code, HA connections, QUIC RTT to the edge, edge locations |
+
+**Pi firmware metrics** come from `lumine/metrics/rpi-metrics.sh`
+(`rpi-metrics.timer`, every 15 s, root for `/dev/vcio`), via `vcgencmd`:
+`rpi_temperature_celsius{sensor="soc"|"pmic"}`, every `get_throttled` bit as
+`rpi_throttled{flag=...}` (`under_voltage_now`, `throttled_occurred`, ...),
+`rpi_clock_hz{clock}` (ARM, core, ISP, EMMC, ...), the Pi 5 PMIC ADC per rail
+(`rpi_pmic_volts`/`_amps`/`_watts`, total `rpi_power_watts`, 5 V input
+`rpi_input_volts`), and info series for the firmware, the EEPROM bootloader
+and the SD card's CID. Idle it draws ~1.9 W at ~49 °C.
+
+**Exposure.** The exporters listen on every interface, and
+`care-box-firewall.service` loads `lumine/metrics/care-box-metrics.nft`: its
+own nftables table (atomically replaced, Tailscale's tables untouched) drops
+those six ports on anything but `lo` and `tailscale0`. It's ordered before
+the network and the exporters at boot, and `box-provision` loads it before
+apt can start a freshly installed exporter. Verified: from avocado,
+`100.67.15.72:9100` answers and `192.168.165.244:9100` (LAN) times out.
+
+**Scraping** is `k8s/monitoring/care-box-scrape.yaml`, a `VMStaticScrape`
+of `100.67.15.72` (pods reach tailnet IPs through avocado's tailscale0, but
+not MagicDNS names). Every series gets `host="lumine"`. The node target is
+`job="node-exporter"`, so the stack's stock node alerts apply to lumine as
+well. On top of them, `care-box-vmrules.yaml` adds: unreachable, under-voltage
+(now: critical, since boot: warning), hot, throttling, SD card > 85%, memory,
+units down, crash loops, postgres/redis down, connections, Celery backlog,
+tunnel down. See [Monitoring](monitoring.md) for the table. The collectors
+package's timers for absent hardware (SMART, NVMe, IPMI, Mellanox) are
+masked, so they can't trip the failed-unit alert.
+
+Linux PSI (`node_pressure_*`) is off in the Raspberry Pi kernel by default
+(`psi=1` on the kernel command line would enable it; not done).
 
 ## Gotchas
 

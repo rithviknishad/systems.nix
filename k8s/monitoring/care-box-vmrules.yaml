@@ -1,0 +1,208 @@
+---
+# care-box-vmrules.yaml — alerts for CARE in a box on the Raspberry Pi
+# lumine (docs/care-box.md "Metrics"), from the exporters scraped by
+# care-box-scrape.yaml. Generic host alerts (filesystem filling, memory,
+# clock, failed systemd units, ...) already come from the stack's stock
+# node-exporter rules, because lumine's node target is job="node-exporter";
+# these add what's specific to a Pi and to this stack. Backup alerts are in
+# backup-vmrules.yaml.
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMRule
+metadata:
+  name: care-box-alerts
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: care-box
+    app.kubernetes.io/component: alerting
+    app.kubernetes.io/part-of: victoria-metrics-k8s-stack
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  groups:
+    - name: care-box-host
+      rules:
+        # Every exporter down at once = the Pi (or the tailnet path to it)
+        # is gone; that's one alert, not six.
+        - alert: CareBoxUnreachable
+          expr: |-
+            max(up{host="lumine"}) == 0
+          for: 3m
+          labels:
+            severity: critical
+          annotations:
+            summary: "lumine (care-box) is unreachable from avocado"
+            description: >-
+              No exporter on lumine (100.67.15.72) answered for 3m: the Pi is
+              down, off the tailnet, or its metrics firewall changed. Public
+              care-box is probably down too; check Gatus and `just box-health`.
+
+        - alert: CareBoxExporterDown
+          expr: |-
+            up{host="lumine"} == 0 unless on() (max(up{host="lumine"}) == 0)
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "care-box exporter {{ $labels.job }} is down"
+            description: >-
+              {{ $labels.job }} on lumine isn't answering scrapes. `just
+              box-ssh`, then `systemctl status prometheus-*-exporter`.
+
+        # Pi 5: soft throttling of the ARM cores starts at 80 °C.
+        - alert: CareBoxHot
+          expr: |-
+            rpi_temperature_celsius{host="lumine",sensor="soc"} > 75
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "lumine's SoC is at {{ $value | humanize }}°C"
+            description: >-
+              Sustained above 75 °C; the Pi 5 throttles from 80 °C. Check
+              the cooler/fan and the dashboard's CPU-by-service panel.
+
+        - alert: CareBoxThrottling
+          expr: |-
+            rpi_throttled{host="lumine",flag=~"throttled_now|freq_capped_now|soft_temp_limit_now"} == 1
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "lumine is throttling ({{ $labels.flag }})"
+            description: >-
+              The firmware is limiting the CPU right now (vcgencmd
+              get_throttled). Usually heat; if under_voltage is also set,
+              the power supply.
+
+        # Under-voltage corrupts SD cards: page while it's happening.
+        - alert: CareBoxUnderVoltage
+          expr: |-
+            rpi_throttled{host="lumine",flag="under_voltage_now"} == 1
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: "lumine is under-volted right now"
+            description: >-
+              The 5 V input is below the firmware's threshold (see
+              rpi_input_volts on the care-box dashboard). Risk of SD-card
+              corruption. Use the official 27 W supply and check the cable.
+
+        # Latched until reboot, so this stays up once set: a brownout
+        # happened at some point since boot.
+        - alert: CareBoxUnderVoltageOccurred
+          expr: |-
+            rpi_throttled{host="lumine",flag="under_voltage_occurred"} == 1
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "lumine was under-volted since its last boot"
+            description: >-
+              vcgencmd get_throttled latched an under-voltage event. The
+              flag clears on reboot. If it recurs, the supply is marginal.
+
+        # The SD card is small, and a full root takes postgres down with it.
+        - alert: CareBoxSDCardFilling
+          expr: |-
+            1 - node_filesystem_avail_bytes{host="lumine",mountpoint="/"} / node_filesystem_size_bytes{host="lumine",mountpoint="/"} > 0.85
+          for: 30m
+          labels:
+            severity: warning
+          annotations:
+            summary: "lumine's SD card is {{ $value | humanizePercentage }} full"
+            description: >-
+              Check old releases under /opt/care, the journal and
+              /var/lib/care. Backups don't live here (they're on avocado).
+
+        - alert: CareBoxMemoryLow
+          expr: |-
+            node_memory_MemAvailable_bytes{host="lumine"} / node_memory_MemTotal_bytes{host="lumine"} < 0.10
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "lumine has under 10% memory available"
+            description: >-
+              2 GB box; the care units' MemoryMax= will start OOM-killing.
+              See the dashboard's memory-by-service (PSS) panel.
+
+    - name: care-box-services
+      rules:
+        # The units the public site needs. A deliberate `just box-stop`
+        # fires this too, after 5m.
+        - alert: CareBoxServiceDown
+          expr: |-
+            node_systemd_unit_state{host="lumine",state="active",name=~"care-(api|worker|beat)\\.service|postgresql@17-main\\.service|redis-server\\.service|nginx\\.service|versitygw\\.service|cloudflared-lumine\\.service"} == 0
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "care-box: {{ $labels.name }} is not active"
+            description: >-
+              {{ $labels.name }} on lumine has not been active for 5m.
+              `just box-status`, `just box-logs {{ $labels.name }}`.
+
+        # Restart=always hides crash loops from the unit state.
+        - alert: CareBoxCrashLooping
+          expr: |-
+            increase(node_systemd_service_restart_total{host="lumine",name=~"care-.*|versitygw.service|cloudflared-lumine.service"}[30m]) > 3
+          labels:
+            severity: warning
+          annotations:
+            summary: "care-box: {{ $labels.name }} restarted {{ $value | humanize }} times in 30m"
+            description: >-
+              systemd keeps restarting {{ $labels.name }}. `just box-logs
+              {{ $labels.name }}`.
+
+        - alert: CareBoxPostgresDown
+          expr: |-
+            pg_up{host="lumine"} == 0
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: "care-box: postgres-exporter can't reach PostgreSQL"
+
+        - alert: CareBoxPostgresConnectionsHigh
+          expr: |-
+            sum(pg_stat_activity_count{host="lumine"}) / max(pg_settings_max_connections{host="lumine"}) > 0.8
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "care-box: PostgreSQL at {{ $value | humanizePercentage }} of max_connections"
+            description: >-
+              max_connections is only 30 on lumine (lumine/postgresql/care-box.conf).
+
+        - alert: CareBoxRedisDown
+          expr: |-
+            redis_up{host="lumine"} == 0
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: "care-box: Redis is down (Celery broker + cache)"
+
+        - alert: CareBoxCeleryBacklog
+          expr: |-
+            redis_key_size{host="lumine",key="celery"} > 50
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "care-box: {{ $value | humanize }} Celery tasks waiting"
+            description: >-
+              The worker (concurrency 1) isn't keeping up or is stuck.
+              `just box-logs care-worker`.
+
+        - alert: CareBoxTunnelDown
+          expr: |-
+            cloudflared_tunnel_ha_connections{host="lumine"} < 1
+          for: 3m
+          labels:
+            severity: critical
+          annotations:
+            summary: "care-box: the lumine tunnel has no connection to Cloudflare"
+            description: >-
+              https://care-box.rithviknishad.dev is unreachable.
+              `just box-logs cloudflared-lumine`.

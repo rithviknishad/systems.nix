@@ -18,6 +18,8 @@
 #   - VictoriaLogs + Vector log pipeline + a Grafana logs datasource.
 #   - Internet monitoring (speedtest + blackbox probes), ported from
 #     geerlingguy/internet-pi off its Raspberry Pi onto this cluster.
+#   - care-box: static scrape of the Pi lumine's exporters over the tailnet,
+#     Pi/stack alerts and a dashboard (docs/care-box.md).
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
@@ -42,6 +44,11 @@ resources:
   - pvc-storage-vmrules.yaml
   # Backup freshness/failure alerts (kube-state-metrics CronJob outcomes).
   - backup-vmrules.yaml
+  # care-box: the Raspberry Pi lumine (CARE in a box), scraped over the
+  # tailnet; its alerts and dashboard.
+  - care-box-scrape.yaml
+  - care-box-vmrules.yaml
+  - care-box-grafana-dashboard.yaml
   # Per-container metrics from kubelet's embedded cAdvisor.
   - cadvisor-vmnodescrape.yaml
   # Uptime: synthetic probing of internal + public endpoints -> ntfy.

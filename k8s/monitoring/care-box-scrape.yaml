@@ -1,0 +1,55 @@
+---
+# care-box-scrape.yaml — scrape the Raspberry Pi lumine (CARE in a box,
+# docs/care-box.md) over the tailnet.
+#
+# lumine isn't a k8s node, so its exporters are static targets. Pods reach
+# the tailnet through avocado's own tailscale0 (flannel masquerades them),
+# but can't resolve MagicDNS names, hence the IP. lumine only accepts these
+# ports on tailscale0 (lumine/metrics/care-box-metrics.nft).
+#
+# Every series gets host="lumine" (the dashboard and the care-box rules key
+# on it) and instance="lumine" instead of ip:port. The node target is
+# job="node-exporter" on purpose: that's what the stack's stock node alerts
+# (filesystem, memory, clock, systemd ...) and the Node Exporter Full
+# dashboard select on, so lumine gets them for free.
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMStaticScrape
+metadata:
+  name: care-box-lumine
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: care-box
+    app.kubernetes.io/component: scrape
+spec:
+  jobName: care-box
+  targetEndpoints:
+    - targets: ["100.67.15.72:9100"]
+      labels: { host: lumine }
+      relabelConfigs:
+        - { targetLabel: job, replacement: node-exporter }
+        - { targetLabel: instance, replacement: lumine }
+    - targets: ["100.67.15.72:9187"]
+      labels: { host: lumine }
+      relabelConfigs:
+        - { targetLabel: job, replacement: care-box-postgres }
+        - { targetLabel: instance, replacement: lumine }
+    - targets: ["100.67.15.72:9121"]
+      labels: { host: lumine }
+      relabelConfigs:
+        - { targetLabel: job, replacement: care-box-redis }
+        - { targetLabel: instance, replacement: lumine }
+    - targets: ["100.67.15.72:9113"]
+      labels: { host: lumine }
+      relabelConfigs:
+        - { targetLabel: job, replacement: care-box-nginx }
+        - { targetLabel: instance, replacement: lumine }
+    - targets: ["100.67.15.72:9256"]
+      labels: { host: lumine }
+      relabelConfigs:
+        - { targetLabel: job, replacement: care-box-process }
+        - { targetLabel: instance, replacement: lumine }
+    - targets: ["100.67.15.72:9300"]
+      labels: { host: lumine }
+      relabelConfigs:
+        - { targetLabel: job, replacement: care-box-cloudflared }
+        - { targetLabel: instance, replacement: lumine }

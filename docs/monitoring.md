@@ -100,6 +100,9 @@ alerts are dropped to a blackhole receiver. Grouping: by `alertname` +
 | `blackbox-exporter.yaml` | external HTTP/DNS probes (`VMProbe`) → `probe_*` metrics |
 | `internet-vmrules.yaml` | internet down / degraded alerts |
 | `internet-grafana-dashboard.yaml` | "Internet Connection" dashboard |
+| `care-box-scrape.yaml` | `VMStaticScrape` of the Raspberry Pi **lumine**'s exporters over the tailnet ([CARE in a box](care-box.md#metrics)) |
+| `care-box-vmrules.yaml` | Pi + CARE-stack alerts for lumine |
+| `care-box-grafana-dashboard.yaml` | "care-box (lumine)" dashboard (folder `care-box`) |
 | `victorialogs.yaml` | VictoriaLogs log database (30d, 10 Gi PVC) |
 | `vector.yaml` | Vector DaemonSet shipping pod logs → VictoriaLogs |
 | `victorialogs-datasource.yaml` | Grafana datasource for VictoriaLogs |
@@ -179,6 +182,33 @@ Cluster-wide, from `kubelet_volume_stats_*`.
 | `PVCFillingUp` | warning | > 80% full for 10m |
 | `PVCCriticallyFull` | critical | > 90% full for 5m |
 | `PVCAlmostOutOfInodes` | warning | > 80% inodes used for 10m |
+
+### care-box / lumine (`care-box-vmrules.yaml`)
+
+The Raspberry Pi **lumine** isn't a k8s node: `care-box-scrape.yaml` scrapes
+its six exporters at `100.67.15.72` over avocado's tailnet (pods can reach
+tailnet IPs but not MagicDNS names). Every series carries `host="lumine"`.
+Its node target is labelled `job="node-exporter"` on purpose, so the stock
+node alerts (filesystem, memory, clock, failed systemd units, ...) and the
+**Node Exporter Full** dashboard cover it too. Details in
+[CARE in a box → Metrics](care-box.md#metrics).
+
+| Alert | Severity | Fires when |
+|---|---|---|
+| `CareBoxUnreachable` | critical | every lumine exporter down for 3m (Pi or tailnet path gone) |
+| `CareBoxExporterDown` | warning | one exporter down 10m while others answer |
+| `CareBoxUnderVoltage` | critical | `vcgencmd get_throttled` under-voltage **now** (SD-card corruption risk) |
+| `CareBoxUnderVoltageOccurred` | warning | under-voltage latched since boot |
+| `CareBoxHot` | warning | SoC > 75 °C for 10m (Pi 5 throttles from 80 °C) |
+| `CareBoxThrottling` | warning | throttled / frequency-capped / soft temp limit now, 5m |
+| `CareBoxSDCardFilling` | warning | root filesystem > 85% for 30m |
+| `CareBoxMemoryLow` | warning | < 10% memory available for 15m |
+| `CareBoxServiceDown` | critical | a unit the site needs (care-api/worker/beat, postgres, redis, nginx, versitygw, the tunnel) inactive 5m, including after a deliberate `just box-stop` |
+| `CareBoxCrashLooping` | warning | a care/versitygw/tunnel unit restarted > 3 times in 30m |
+| `CareBoxPostgresDown` / `CareBoxRedisDown` | critical | the exporter can't reach the database / broker |
+| `CareBoxPostgresConnectionsHigh` | warning | > 80% of `max_connections` (30) for 10m |
+| `CareBoxCeleryBacklog` | warning | > 50 tasks queued for 15m |
+| `CareBoxTunnelDown` | critical | the `lumine` tunnel has no edge connection for 3m |
 
 Standard node/Kubernetes alerts come from the chart's `defaultRules`.
 

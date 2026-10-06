@@ -533,3 +533,11 @@ zram swap (2 GB) is the safety net; consider folding beat into the worker
   `CareBox*` alerts. `just box-backup` / `box-backups`. Tested the script by
   hand (2 runs, prune, scratch-DB restore) and the forced command's
   refusals; the service itself runs once avocado is deployed.
+- 2026-10-07: **metrics.** Debian's node/postgres/redis/nginx/process
+  exporters + cloudflared `metrics:` + `rpi-metrics.timer` (vcgencmd:
+  temps, throttle bits, clocks, PMIC rails/power), all from `lumine/metrics/`;
+  ports tailnet-only via our own nft table (LAN verified blocked). avocado:
+  `VMStaticScrape` (node target as `job=node-exporter` for stock
+  alerts/dashboards), `care-box-vmrules.yaml`, "care-box (lumine)"
+  dashboard (71 panels). All 119 PromQL expressions parse-checked against
+  VictoriaMetrics.

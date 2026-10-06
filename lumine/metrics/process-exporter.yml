@@ -1,0 +1,18 @@
+# process-exporter groups for lumine (/etc/prometheus/process-exporter.yml,
+# installed by lumine/provision.sh). The first matching rule wins, so CARE's
+# python processes are told apart by their command lines before the generic
+# catch-all groups everything else by executable name.
+process_names:
+  - name: care-api
+    cmdline: ['gunicorn .*config\.wsgi']
+  - name: care-worker
+    cmdline: ['celery .*worker']
+  - name: care-beat
+    cmdline: ['celery .*beat']
+  # beat's ExecStartPre= steps and `just box-manage`.
+  - name: care-manage
+    cmdline: ['manage\.py']
+  - name: postgres
+    comm: [postgres]
+  - name: '{{.Comm}}'
+    cmdline: ['.+']

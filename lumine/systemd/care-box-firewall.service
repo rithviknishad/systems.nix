@@ -1,0 +1,21 @@
+# Loads lumine/metrics/care-box-metrics.nft (from the synced copy in
+# /usr/local/lib/care-box): the metrics ports are
+# tailnet + loopback only. Ordered before the network and the exporters, so
+# there's no window at boot where they're reachable from the LAN. Installed
+# and enabled by lumine/provision.sh; see docs/care-box.md.
+[Unit]
+Description=Firewall for care-box's metrics ports (tailnet + loopback only)
+DefaultDependencies=no
+Before=network-pre.target prometheus-node-exporter.service prometheus-postgres-exporter.service prometheus-redis-exporter.service prometheus-nginx-exporter.service prometheus-process-exporter.service cloudflared-lumine.service
+Wants=network-pre.target
+After=local-fs.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /usr/local/lib/care-box/metrics/care-box-metrics.nft
+ExecReload=/usr/sbin/nft -f /usr/local/lib/care-box/metrics/care-box-metrics.nft
+ExecStop=/usr/sbin/nft delete table inet care_box_metrics
+
+[Install]
+WantedBy=sysinit.target

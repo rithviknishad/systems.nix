@@ -1,0 +1,7 @@
+# /etc/default/prometheus-process-exporter on lumine (lumine/provision.sh).
+# Per-service CPU, memory (incl. PSS via smaps), IO and threads: what
+# cAdvisor gives avocado's pods, for the box's plain systemd services.
+ARGS="-web.listen-address=:9256 \
+-config.path=/etc/prometheus/process-exporter.yml \
+-gather-smaps=true \
+-threads=false"

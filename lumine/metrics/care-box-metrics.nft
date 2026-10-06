@@ -1,0 +1,28 @@
+#!/usr/sbin/nft -f
+# Metrics ports on lumine: reachable from the tailnet (avocado's vmagent
+# scrapes 100.67.15.72) and loopback only, never from the LAN, which has no
+# other firewall. The exporters bind every interface, so this table is what
+# keeps them off the LAN without tying their configs to the tailnet IP.
+#
+# Its own table, replaced atomically on every load (the `table` + `delete
+# table` pair makes it idempotent): Tailscale's iptables-nft tables and
+# anything else are untouched, which a `flush ruleset` would not leave alone.
+# Loaded by care-box-firewall.service (lumine/provision.sh).
+#
+#   9100 node  9113 nginx  9121 redis  9187 postgres  9256 process  9300 cloudflared
+
+table inet care_box_metrics
+delete table inet care_box_metrics
+
+table inet care_box_metrics {
+  set metrics_ports {
+    type inet_service
+    elements = { 9100, 9113, 9121, 9187, 9256, 9300 }
+  }
+
+  chain input {
+    type filter hook input priority filter; policy accept;
+    iifname { "lo", "tailscale0" } accept
+    tcp dport @metrics_ports drop
+  }
+}
