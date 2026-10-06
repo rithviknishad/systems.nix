@@ -296,6 +296,57 @@ data:
         alerts:
           - type: ntfy
 
+      # --- care-box: CARE on the Raspberry Pi lumine (docs/care-box.md) ------
+      # One origin through lumine's own tunnel, path-routed by nginx on the
+      # Pi. Only /api/ reaches the backend there: /ping/ would be answered by
+      # the SPA's index.html fallback, so the API is probed via /api/ paths.
+      # Host-level health (units, temps, ...) is in care-box-vmrules.yaml.
+
+      # The SPA (nginx on the Pi serving /opt/care/fe) + the edge cert.
+      - name: care-box-fe
+        group: ohcnetwork/care-box
+        url: "https://care-box.rithviknishad.dev/"
+        interval: 5m
+        conditions:
+          - "[STATUS] == 200"
+          - "[CERTIFICATE_EXPIRATION] > 240h"
+        alerts:
+          - type: ntfy
+
+      # Public plug list: gunicorn -> Django -> postgres (or its redis cache),
+      # and that the abdm plug_config is registered (`just box-register-abdm`).
+      - name: care-box-api
+        group: ohcnetwork/care-box
+        url: "https://care-box.rithviknishad.dev/api/v1/plug_config/"
+        interval: 5m
+        conditions:
+          - "[STATUS] == 200"
+          - "[BODY].configs[0].slug == abdm"
+        alerts:
+          - type: ntfy
+
+      # The abdm plug loaded in the backend (and the route ABDM callbacks
+      # would take, though the bridge URL still points at avocado).
+      - name: care-box-abdm
+        group: ohcnetwork/care-box
+        url: "https://care-box.rithviknishad.dev/api/abdm/health"
+        interval: 5m
+        conditions:
+          - "[STATUS] == 200"
+          - "[BODY].plug == abdm"
+        alerts:
+          - type: ntfy
+
+      # The ABDM MFE entry; a 404 breaks every ABDM screen in the SPA.
+      - name: care-box-abdm-fe
+        group: ohcnetwork/care-box
+        url: "https://care-box.rithviknishad.dev/mfe-plugs/abdm/assets/remoteEntry.js"
+        interval: 5m
+        conditions:
+          - "[STATUS] == 200"
+        alerts:
+          - type: ntfy
+
       # --- attic (Nix binary cache) ------------------------------------------
 
       # atticd liveness in-cluster. GET / returns a 200 placeholder page, which
@@ -540,7 +591,7 @@ spec:
         app.kubernetes.io/name: gatus
       annotations:
         # Bump to roll the pod when the config changes.
-        checksum/config: config-v36
+        checksum/config: config-v37
     spec:
       securityContext:
         runAsNonRoot: true

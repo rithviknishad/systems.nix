@@ -133,7 +133,9 @@ data:
   # here is a secondary host on a multi-host Ingress (care, care-teleicu) that
   # already has its own discovered tile; splitting those Ingresses just to get
   # a tile would risk CARE's path routing. Weights interleave with the
-  # discovered tiles' `gethomepage.dev/weight` annotations.
+  # discovered tiles' `gethomepage.dev/weight` annotations. The exception is
+  # CARE box, which isn't on k3s at all (Raspberry Pi lumine, own tunnel):
+  # no pods to show, so `siteMonitor` gives its tile a live status instead.
   services.yaml: |
     - CARE:
         - CARE API:
@@ -144,6 +146,12 @@ data:
             namespace: care
             app: care-backend
             podSelector: app=care-backend
+        - CARE box:
+            href: https://care-box.rithviknishad.dev
+            description: CARE on a Raspberry Pi 5 (lumine)
+            icon: mdi-raspberry-pi
+            weight: 30
+            siteMonitor: https://care-box.rithviknishad.dev/api/abdm/health
     - TeleICU:
         - TeleICU Devices:
             href: https://care-teleicu-devices.rithviknishad.dev
@@ -247,7 +255,7 @@ spec:
       labels: { app.kubernetes.io/name: homepage }
       annotations:
         # Bump to roll the pod when homepage-config changes (read at startup).
-        checksum/config: config-v2
+        checksum/config: config-v3
     spec:
       serviceAccountName: homepage
       # The image's entrypoint only chowns and drops privileges when started as

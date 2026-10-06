@@ -285,6 +285,9 @@ until Phase 1 is done).
   `createsuperuser` run by the user).
 
 ## Phase 6: Operations
+> **Done 2026-10-07, revised** (see status log): backups are pulled to
+> avocado rather than dumped on the SD card; plus metrics + Grafana and
+> avocado as the control plane.
 - Nightly `pg_dump -Fc` via a systemd timer on the SSD (14-day prune), **and
   rsync the dumps + the VersityGW directory to avocado**: a second machine,
   so actual disaster recovery.
@@ -541,3 +544,10 @@ zram swap (2 GB) is the safety net; consider folding beat into the worker
   alerts/dashboards), `care-box-vmrules.yaml`, "care-box (lumine)"
   dashboard (71 panels). All 119 PromQL expressions parse-checked against
   VictoriaMetrics.
+- 2026-10-07: **Phase 6 done** (on avocado's side, pending its deploy):
+  Gatus group `ohcnetwork/care-box` (SPA + cert, `/api/v1/plug_config/`,
+  `/api/abdm/health`, MFE entry; `/ping/` is useless here, the SPA answers
+  it), static **CARE box** Homepage tile with `siteMonitor`, docs. To go
+  live: `just deploy` (backup service + host key), `just mon-deploy` or
+  `kubectl apply -k k8s/monitoring` (scrape, rules, dashboard, Gatus) and
+  `just apps-deploy` (Homepage).

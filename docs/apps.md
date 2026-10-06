@@ -40,6 +40,7 @@ flowchart TB
 | Personal | suchi | `suchi.rithviknishad.dev` | `k8s/suchi/suchi.yaml` Ingress |
 | CARE | CARE | `care.rithviknishad.dev` | `k8s/care/care.yaml` Ingress |
 | CARE | CARE API | `care-api.rithviknishad.dev` | static, `services.yaml` |
+| CARE | CARE box | `care-box.rithviknishad.dev` | static, `services.yaml`: on the Raspberry Pi lumine, not k3s, so its status comes from `siteMonitor` ([CARE in a box](care-box.md)) |
 | Infrastructure | Kite | `kite.rithviknishad.dev` | `k8s/kite/kite.yaml` Ingress |
 | Infrastructure | Grafana | `grafana.rithviknishad.dev` | `k8s/monitoring/grafana-ingress.yaml` |
 | Infrastructure | Status (+ Gatus up/down widget) | `status.rithviknishad.dev` | `k8s/monitoring/gatus.yaml` Ingress |

@@ -539,6 +539,16 @@ masked, so they can't trip the failed-unit alert.
 Linux PSI (`node_pressure_*`) is off in the Raspberry Pi kernel by default
 (`psi=1` on the kernel command line would enable it; not done).
 
+**Uptime.** Gatus probes the public origin every 5 min in the
+**`ohcnetwork/care-box`** group (`k8s/monitoring/gatus.yaml`) and alerts
+through ntfy: `care-box-fe` (SPA + certificate > 10 days), `care-box-api`
+(`/api/v1/plug_config/` lists `abdm`: gunicorn, DB and the plug_config),
+`care-box-abdm` (`/api/abdm/health`) and `care-box-abdm-fe` (the MFE's
+`remoteEntry.js`). Not `/ping/`: only `/api/` reaches the backend here, so
+the SPA's fallback would answer it with a 200. The app gallery
+(`apps.rithviknishad.dev`) has a static **CARE box** tile with a
+`siteMonitor` status dot ([Apps](apps.md)).
+
 ## Gotchas
 
 - **The memory cgroup is off by default** on Raspberry Pi OS. The firmware

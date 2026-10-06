@@ -17,7 +17,11 @@ modules/
   ssh.nix                     OpenSSH (key-only)
   zfs.nix                     scrub / trim / auto-snapshot
   tailscale.nix               tailscale service
+  care-box.nix                control plane for the Pi lumine: host key + nightly backup pull
 users/rithviknishad.nix       user + authorized SSH key
+lumine/                       Raspberry Pi lumine (Raspberry Pi OS): CARE in a box at
+                              care-box.rithviknishad.dev, driven from here by `just box-*`
+                              (docs/care-box.md)
 ```
 
 ## Disk layout
