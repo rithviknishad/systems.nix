@@ -551,3 +551,13 @@ zram swap (2 GB) is the safety net; consider folding beat into the worker
   live: `just deploy` (backup service + host key), `just mon-deploy` or
   `kubectl apply -k k8s/monitoring` (scrape, rules, dashboard, Gatus) and
   `just apps-deploy` (Homepage).
+- 2026-10-07: **live + pushed.** Deployed avocado (`care-box-backup.timer`
+  scheduled, key at `/run/secrets/care-box-backup/ssh_key`, lumine in
+  `ssh_known_hosts`, no failed units), applied `k8s/monitoring` +
+  Homepage. First `just box-backup`: snapshot `2026-10-07T024842Z`
+  (1.0 MB dump, `s3/` empty: demo fixtures upload nothing), textfile metrics
+  scraped. `up{host="lumine"}` = 6/6, `rpi_*` series present, all 18
+  `CareBox*` rules loaded (none firing), dashboard in folder `care-box`,
+  the 4 Gatus `ohcnetwork/care-box` probes green, Homepage tile rendered.
+  Still to do on the Pi: remove `~/systems.nix` + the Cursor/Zed/Warp
+  remote-server dirs (the "keep the box free of agent sessions" gotcha).
