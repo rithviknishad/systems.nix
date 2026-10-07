@@ -58,8 +58,9 @@ Nothing about care-box is operated from the Pi itself. The recipes run where
 this repo is (avocado or the Mac), and reach the box as `rithviknishad@lumine`
 over the tailnet (passwordless sudo there):
 
-- **Scripts and config** (`lumine/` minus `PLAN.md`, plus avocado's
-  `k8s/care/additional-plugs.json` and a `SYSTEMS_NIX_REVISION` stamp) are
+- **Scripts and config** (`lumine/` minus `PLAN.md` and the build-only
+  `care_fe/` overlay, plus avocado's `k8s/care/additional-plugs.json` and a
+  `SYSTEMS_NIX_REVISION` stamp) are
   rsynced to **`/usr/local/lib/care-box`**, root-owned and read-only to
   everyone else, by `just box-sync`. Every recipe that runs a script there
   syncs first, so the box always runs this checkout's version, like `just
@@ -265,7 +266,19 @@ avocado** (it needs docker and the RAM):
 - builds care_fe at the head of `bodhi/questionnaire-actions` with the same
   `.env.local` as `care-fe-image`, but with
   `REACT_CARE_API_URL=https://care-box.rithviknishad.dev`
-  (+ `REACT_MFE_REGISTERED_COMPONENTS=AddFacilitySheet`);
+  (+ `REACT_MFE_REGISTERED_COMPONENTS=AddFacilitySheet`) and the care-box
+  logo as the state logo (`REACT_STATE_LOGO`, a JSON string
+  `{"light": ..., "dark": ...}`, single-quoted in `.env.local` so dotenv
+  keeps it intact). care_fe's `scripts/validate-env.ts` fails the build
+  unless both are **absolute** URLs, so they are
+  `https://care-box.rithviknishad.dev/images/CareOnABox_flat.svg`;
+- sets the login page's `REACT_CUSTOM_DESCRIPTION` ("running on a
+  Raspberry Pi 5 (2GB)" + a link to this page). care_fe renders it as
+  GitHub-flavoured markdown at build time (bare URLs become links) and
+  sanitizes it with DOMPurify;
+- overlays `lumine/care_fe/` onto the checkout before the build, mirroring
+  care_fe's layout: `public/images/CareOnABox_flat.svg` is served as
+  `/images/CareOnABox_flat.svg`. Put more assets there the same way;
 - builds the ABDM MFE from `k8s/care/abdm-fe` at the sha pinned in
   `additional-plugs.json`. The files are identical to avocado's MFE (it
   bakes in no origin, only its `/mfe-plugs/abdm/` base);
@@ -274,7 +287,7 @@ avocado** (it needs docker and the RAM):
   files, then flips the `current` symlink.
 
 ```
-/opt/care/fe/<sha12>-<cfg8>/{html/,REVISION}        # care_fe; <cfg8> = hash of .env.local
+/opt/care/fe/<sha12>-<cfg8>/{html/,REVISION}        # care_fe; <cfg8> = hash of .env.local + lumine/care_fe/
 /opt/care/abdm-fe/<sha12>-<cfg8>/{html/,REVISION}   # ABDM MFE; <cfg8> = hash of k8s/care/abdm-fe/
 /opt/care/{fe,abdm-fe}/current                       # what nginx serves
 ```

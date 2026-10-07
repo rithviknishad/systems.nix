@@ -856,7 +856,8 @@ box-sync:
     stage=$(mktemp -d)
     trap 'rm -rf "$stage"' EXIT
     chmod 755 "$stage"
-    rsync -a --exclude PLAN.md lumine/ "$stage/"
+    # care_fe/ is box-fe's build input on the control plane, not used on the box.
+    rsync -a --exclude PLAN.md --exclude /care_fe/ lumine/ "$stage/"
     cp k8s/care/additional-plugs.json "$stage/care/"
     rev=$(git rev-parse --short HEAD)
     [ -z "$(git status --porcelain -- lumine k8s/care/additional-plugs.json)" ] || rev=$rev-dirty
@@ -1054,8 +1055,11 @@ box-backups:
 # Run ON AVOCADO: the Vite build needs ~4 GB of RAM and lumine has 2 GB, while
 # the output is architecture-independent static files. Builds care_fe at the
 # head of `ref` with the care-box origin baked in (same .env.local as
-# care-fe-image), and the ABDM MFE from k8s/care/abdm-fe at the sha pinned in
-# additional-plugs.json (identical to avocado's: the MFE bakes in no origin).
+# care-fe-image, plus the care-box logo and login-page description) and
+# lumine/care_fe/ overlaid on the checkout (files under public/ are served
+# from /), and the ABDM MFE from
+# k8s/care/abdm-fe at the sha pinned in additional-plugs.json (identical to
+# avocado's: the MFE bakes in no origin).
 # Copies the files out of the images and rsyncs them to lumine as
 # /opt/care/{fe,abdm-fe}/<id>/{html,REVISION}, then flips each `current`
 # symlink; nginx serves the new files on the next request. Keeps the two
@@ -1065,11 +1069,21 @@ box-backups:
 box-fe ref="bodhi/questionnaire-actions" repo="ohcnetwork/care_fe":
     #!/usr/bin/env bash
     set -euo pipefail
-    envlocal='REACT_CARE_API_URL={{box_origin}}\nREACT_MFE_REGISTERED_COMPONENTS=AddFacilitySheet\n'
+    # REACT_*_LOGO is a JSON string; single quotes keep dotenv from touching it.
+    # scripts/validate-env.ts fails the build unless light/dark are absolute
+    # URLs (z.url()), so the overlay's /images/ path gets the box origin.
+    envlocal=$(cat <<'EOF'
+    REACT_CARE_API_URL={{box_origin}}
+    REACT_MFE_REGISTERED_COMPONENTS=AddFacilitySheet
+    REACT_STATE_LOGO='{"light": "{{box_origin}}/images/CareOnABox_flat.svg", "dark": "{{box_origin}}/images/CareOnABox_flat.svg"}'
+    REACT_CUSTOM_DESCRIPTION="This instance of CARE is running on **Raspberry Pi 5 (2GB)**. Read more at: https://rithviknishad.github.io/systems.nix/care-box.html"
+    EOF
+    )
+    overlay=lumine/care_fe
     sha=$(git ls-remote https://github.com/{{repo}} refs/heads/{{ref}} | cut -f1)
     [ -n "$sha" ] || { echo "no branch {{ref}} in {{repo}}" >&2; exit 1; }
     abdm=$(python3 -c 'import json; print(next(p for p in json.load(open("k8s/care/additional-plugs.json")) if p["name"] == "abdm")["package_name"].split("@")[1].split("#")[0])')
-    fe_id=${sha:0:12}-$(printf "$envlocal" | sha256sum | cut -c1-8)
+    fe_id=${sha:0:12}-$({ printf '%s\n' "$envlocal"; cd "$overlay" && find . -type f | LC_ALL=C sort | xargs sha256sum; } | sha256sum | cut -c1-8)
     abdm_id=${abdm:0:12}-$(cat k8s/care/abdm-fe/* | sha256sum | cut -c1-8)
     live() { [ "$(ssh {{box_ssh}} readlink "/opt/care/$1/current" || true)" = "$2" ]; }
     out=$(mktemp -d)
@@ -1098,7 +1112,8 @@ box-fe ref="bodhi/questionnaire-actions" repo="ohcnetwork/care_fe":
         mkdir -p {{care_build}}
         git clone -q --depth 1 --branch {{ref}} https://github.com/{{repo}} "$src"
         [ "$(git -C "$src" rev-parse HEAD)" = "$sha" ] || { echo "{{ref}} moved during the build; re-run" >&2; exit 1; }
-        printf "$envlocal" >"$src/.env.local"
+        printf '%s\n' "$envlocal" >"$src/.env.local"
+        cp -r "$overlay/." "$src/"
         docker build -t care-fe:box "$src"
         mkdir -p "$out/fe/html"
         extract care-fe:box /usr/share/nginx/html/. "$out/fe/html/"
