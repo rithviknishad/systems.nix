@@ -305,7 +305,12 @@ Vite build needs ~4 GB of RAM and lumine has 2 GB, while the output is
 architecture-independent static files. `just box-fe [ref] [repo]` runs **on
 avocado** (it needs docker and the RAM):
 
-- builds care_fe at the head of `bodhi/questionnaire-actions` with the same
+- builds care_fe at the head of `3.1/immunization-policies` (the top of the
+  CARE 3.1 stack, [care_fe#16916](https://github.com/ohcnetwork/care_fe/pull/16916);
+  its immunization/workspace screens need backend APIs the fork branch
+  doesn't have yet, so their calls 404 for now. avocado's own SPA stays on
+  `bodhi/questionnaire-actions`)
+  with the same
   `.env.local` as `care-fe-image`, but with
   `REACT_CARE_API_URL=https://care-box.rithviknishad.dev`
   (+ `REACT_MFE_REGISTERED_COMPONENTS=AddFacilitySheet`) and the care-box

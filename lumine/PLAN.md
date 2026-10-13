@@ -572,3 +572,11 @@ zram swap (2 GB) is the safety net; consider folding beat into the worker
   fsck clean, xattrs identical, box-health 18/18. Then pulled the SD and
   booted from the SSD: `/` on `sda2`, no failed units, zram up,
   box-health 18/18. Enclosure still on a USB 2 port; move it to USB 3.
+- 2026-10-13: **Frontend -> CARE 3.1.** `box-fe` default ref is now
+  `3.1/immunization-policies` (care_fe#16916, top of the 3.1 stack;
+  diverges from avocado's `bodhi/questionnaire-actions`). No new required
+  env vars in `validate-env.ts`. Shipped `ca71d8b4a798-4db10174`: logo +
+  description in the bundle, box-health 18/18, no 5xx. Known (per the PR):
+  facility forms 500 when `actions` is omitted (backend fixture gap).
+  The fork backend has no immunization/workspace APIs yet, so those
+  screens' API calls 404 until it does.

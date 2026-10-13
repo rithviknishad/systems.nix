@@ -1077,7 +1077,7 @@ box-backups:
 # previous builds of each (rollback: `sudo ln -sfn <id> /opt/care/fe/current`
 # on lumine). Skips a half whose <id> (sha + build config) is already live.
 # Build care_fe + the ABDM MFE for care-box and ship them to lumine.
-box-fe ref="bodhi/questionnaire-actions" repo="ohcnetwork/care_fe":
+box-fe ref="3.1/immunization-policies" repo="ohcnetwork/care_fe":
     #!/usr/bin/env bash
     set -euo pipefail
     # REACT_*_LOGO is a JSON string; single quotes keep dotenv from touching it.
