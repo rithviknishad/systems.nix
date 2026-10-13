@@ -878,6 +878,17 @@ box-provision: box-sync
 box-upgrade:
     ssh -t {{box_ssh}} 'sudo apt-get update -q && sudo DEBIAN_FRONTEND=noninteractive apt-get -y -q full-upgrade'
 
+# Partitions + formats `disk` (refuses a non-empty one without --force), then
+# rsyncs the running SD-card system onto it: one live pass, one with
+# postgres/redis/VersityGW/CARE stopped (~1 min down). New partition ids, so
+# the SD stays a working fallback. --poweroff powers off after the copy instead
+# of restarting the services (pull the SD, power on). Boot order already tries
+# NVMe then USB when no SD card is present.
+#   just box-clone-ssd /dev/sda
+# Clone lumine's SD card onto an SSD (lumine/clone-to-ssd.sh).
+box-clone-ssd disk *flags: box-sync
+    ssh {{box_ssh}} sudo {{box_ops}}/clone-to-ssd.sh {{disk}} {{flags}}
+
 # Decrypted HERE with this machine's age key; the plaintext goes to the box
 # only over SSH stdin (never argv, never a temp file) and lands in root-only
 # files there, one per consumer: /etc/care/care.env (care-*),

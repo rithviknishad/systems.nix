@@ -561,3 +561,14 @@ zram swap (2 GB) is the safety net; consider folding beat into the worker
   the 4 Gatus `ohcnetwork/care-box` probes green, Homepage tile rendered.
   Still to do on the Pi: remove `~/systems.nix` + the Cursor/Zed/Warp
   remote-server dirs (the "keep the box free of agent sessions" gotcha).
+- 2026-10-13: **SSD, round 2.** HAT = Seeed "PCIe to M.2 HAT for Raspberry
+  Pi 5" (mounts under the Pi, SSD powered via pogo pins on the Pi's
+  underside pads; FFC metal side down at the HAT, up at the Pi). After a
+  reseat + reboot still `link down` on `pcie@1000110000`, no HAT EEPROM;
+  advised cleaning the pogo pins/pads + tightening the standoffs. Workaround:
+  the 128 GB NVMe in a JMicron USB enclosure (`sda`, USB 2 port). Cloned
+  with the new `just box-clone-ssd /dev/sda` (docs/care-box.md "Moving to
+  an SSD"): disk id `1cb25ccf`, 4.5 GB in 3m44s, services down 36 s,
+  fsck clean, xattrs identical, box-health 18/18. Then pulled the SD and
+  booted from the SSD: `/` on `sda2`, no failed units, zram up,
+  box-health 18/18. Enclosure still on a USB 2 port; move it to USB 3.

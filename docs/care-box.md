@@ -23,7 +23,7 @@ The build-out plan, the decisions behind it and a dated status log live in
 |---|---|
 | Public URL | `https://care-box.rithviknishad.dev` (lumine's own Cloudflare tunnel `lumine`) |
 | Access | `ssh rithviknishad@lumine` (tailnet, `100.67.15.72`) or `lumine.local` (LAN) |
-| OS | Raspberry Pi OS (Debian 13 trixie, arm64), on the SD card (SSD deferred) |
+| OS | Raspberry Pi OS (Debian 13 trixie, arm64), booted from a 128 GB NVMe SSD in a USB enclosure (`sda`); the SD card is out ([Moving to an SSD](#moving-to-an-ssd)) |
 | Control plane | this repo on avocado or the Mac (in the devshell): `just box-*` ssh to `rithviknishad@lumine`. Scripts and config are shipped to a root-owned `/usr/local/lib/care-box` on the box (`just box-sync`, run by every recipe that needs it) |
 
 ```mermaid
@@ -129,6 +129,48 @@ provisioning. Kernel and firmware updates take effect on the next reboot,
 and `rpi-eeprom-update.service` only auto-flashes the bootloader when it's
 older than the package's critical minimum. Check before rebooting with
 `sudo rpi-eeprom-update`.
+
+### Moving to an SSD
+
+`just box-clone-ssd <disk>` (`lumine/clone-to-ssd.sh`) copies the running
+SD-card system onto an SSD, so the box can boot from it:
+
+- Recreates the SD's layout (MBR, 512 MiB FAT32 `bootfs` at 8 MiB, ext4
+  `rootfs` filling the rest) with a **new disk id**. The SSD's
+  `cmdline.txt` `root=` and `/etc/fstab` are rewritten to its own
+  `PARTUUID`s. The SD card is left untouched as a working fallback, and the
+  two never clash when both are plugged in.
+- **File-level, not `dd`**: `rsync -aHAXx` copies only used space (xattrs
+  included: VersityGW keeps S3 metadata in them). The first pass is live; a
+  second, short one runs with postgres, redis, VersityGW and CARE stopped
+  (nginx and the tunnel stay up, so the site briefly errors), so their data
+  is consistent. `/var/swap` isn't copied: it's recreated the way
+  `rpi-swap` makes it (`fallocate` + `mkswap --label origin:rpi-swap`). Both
+  filesystems are `fsck`ed at the end.
+- Refuses a disk with partitions or signatures unless given `--force`, and a
+  mounted one always. If it fails half-way, the services are started again.
+- `--poweroff` powers the box off after the copy instead of restarting the
+  services, so nothing is written to the SD afterwards. Use it for the real
+  switch-over: anything written after a plain clone stays behind on the SD.
+
+The bootloader's `BOOT_ORDER=0xf461` already tries SD, then NVMe, then USB
+(the EEPROM default). So **pulling the SD card is the switch**; putting it
+back switches back. A clone made over USB also boots from the M.2 HAT once
+that links up, since it's the same disk. After the switch, the dashboard's
+SD-card I/O panels (`device="mmcblk0"`) and `rpi_sd_card_info` go empty.
+
+First clone (2026-10-13): a 128 GB NVMe in a JMicron USB enclosure (`sda`,
+on a USB 2 port at 480 Mbit/s). 4.5 GB copied in 3m44s, services down 36 s,
+VersityGW xattrs identical. The same day the SD card was pulled and the box
+booted from the SSD (`/` = `sda2`, `/boot/firmware` = `sda1`, disk id
+`1cb25ccf`); box-health 18/18. The old SD card is a stale fallback: it
+lacks everything written since the clone, so re-clone onto it (or treat
+it as scratch) rather than booting it as-is.
+
+Still to do: move the enclosure to a **blue USB 3 port** (it's on USB 2,
+480 Mbit/s), and get the Seeed M.2 HAT working (still `link down` on
+`pcie@1000110000`; power comes through its pogo pins; see
+`lumine/PLAN.md`), then move the SSD onto it.
 
 ## Backend
 
@@ -437,7 +479,7 @@ for per-facility setup (HFR link, HRP service registration).
 
 ## Backups
 
-lumine is one SD card, so its backups live on another machine. **avocado
+lumine is a single disk, so its backups live on another machine. **avocado
 pulls them nightly** (`care-box-backup.service`, timer ~03:15 + up to 10 min,
 catches up after downtime; `modules/care-box.nix`):
 
