@@ -7,8 +7,10 @@ nav_order: 13.5
 # CARE in a box: `care-box.rithviknishad.dev` on lumine
 
 **lumine** is a Raspberry Pi 5 (2 GB RAM, 4 cores) running
-[CARE](care.md) on its own: the same backend and care_fe branches and the
-same configuration as avocado, **minus everything TeleICU**. Unlike the
+[CARE](care.md) on its own: the same configuration as avocado, **minus
+everything TeleICU**. The branches differ: lumine tracks its own backend
+and care_fe refs (below), not avocado's (see
+[Currently deployed](care.md#custom-images-built-on-the-box-no-registry)). Unlike the
 rest of this repo it is **not NixOS and not k8s**. It runs Raspberry Pi OS
 (Debian 13 trixie) with plain systemd units, all configured from
 [`lumine/`](https://github.com/rithviknishad/systems.nix/tree/main/lumine).

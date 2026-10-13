@@ -172,13 +172,43 @@ Each image has its own recipe — `care-backend-image <ref> [repo]`,
 all three. `care` and `care_fe` have **independent branches** (and may come
 from forks), so each takes its own ref.
 
-Currently deployed (2026-09-29):
+Currently deployed (2026-10-13):
 
 | Image | Source |
 |---|---|
-| backend | `rithviknishad/care@rithviknishad/bodhi/ENG-737-test-fixtures` (fork; includes the report-model registration fix) |
-| SPA | `ohcnetwork/care_fe@bodhi/questionnaire-actions` |
+| backend | `rithviknishad/care@rithviknishad/ENG-737-backup` @ `0d254c4` (fork: upstream `ohcnetwork/care@ENG-737-backup` + a cherry-pick of the report-model registration fix, [care#3761](https://github.com/ohcnetwork/care/pull/3761)) |
+| SPA | `ohcnetwork/care_fe@bodhi/questionnaire-actions` @ `a129f14` |
 | ABDM MFE | `ohcnetwork/care-abdm@969a278` (from `additional-plugs.json`) |
+
+Why the fork: every ENG-737 line so far lacks care#3761 (still open), and
+without it the care-abdm plug fails Django's model check at start —
+`emr.ReportUpload.template: (fields.E300) ... 'emr.Template' ... not
+installed` — so all three backend pods crash-loop (beat included, so nothing
+migrates). Moving to a new upstream branch = branch it on the fork, cherry-pick
+the fix (`82ae319`; the report imports go *last* in
+`care/emr/models/__init__.py`), build from the fork. Pre-flight a new backend
+image before restarting anything — a throwaway pod with the backend's env
+runs `check --tag models` (deterministic for E300; plain `check` is
+import-order dependent) and `migrate --plan` (read-only):
+
+```sh
+kubectl -n care run care-preflight --rm -i --restart=Never \
+  --image=care-backend:local --image-pull-policy=Never --overrides='{"spec":{
+    "enableServiceLinks":false,"containers":[{"name":"care-preflight",
+    "image":"care-backend:local","imagePullPolicy":"Never",
+    "command":["sh","-c","python manage.py check --tag models && python manage.py migrate --plan"],
+    "envFrom":[{"configMapRef":{"name":"care-backend-env"}},{"secretRef":{"name":"care-secret"}}]}]}}'
+```
+
+The 2026-10-13 switch from the ENG-737-test-fixtures fork branch applied
+`emr` 0089–0094 (valueset `disable_composition`, immunization
+policy/recommendation/record, workspaces; all additive). The images it
+replaced are kept in k3s as `care-backend:pre-eng737-backup` /
+`care-fe:pre-eng737-backup`; to roll back, `just care-db-restore
+pinned/care-pre-ENG-737-backup-rollout-20261013.dump`, then on the box
+`k3s ctr images tag --force docker.io/library/care-backend:pre-eng737-backup
+docker.io/library/care-backend:local` (same for care-fe) and restart the
+Deployments as below.
 
 Upgrading = re-run the image recipe and restart the affected Deployments:
 
@@ -544,6 +574,8 @@ with `DATABASE_URL`'s db swapped to `care_old`, `dropdb care_old` when done).
 |---|---|
 | `pinned/care-pre-abdm-reset-2026-09-29.dump` | the DB before the ABDM/ENG-737 reset (develop-era schema; demo fixtures + users, **no** TeleICU gateway/camera devices — those predate every retained dump). sha256 `ea1aa8c4ad085633b8effc0fb55a41a7008e028d2790bf73938352b45fbf2148`, 1680 TOC entries; test-restored into a scratch DB cleanly |
 | `pinned/care-pre-reset-20260929-141606.dump` | same state, taken automatically by `care-db-reset` (sha256 `e8f4e12d…696bd`) |
+| `pinned/care-pre-ENG-737-backup-20261013.dump` | the DB on the ENG-737-test-fixtures fork backend, before the switch to `ENG-737-backup` (sha256 `680b9083…3cb41`, 2152 TOC entries) |
+| `pinned/care-pre-ENG-737-backup-rollout-20261013.dump` | same, re-pinned right before the rollout applied `emr` 0089–0094 — the one to restore when rolling back (sha256 `6208df3f…63edd`, 2152 TOC entries) |
 
 ### The backup PVC must outlive its namespace
 
