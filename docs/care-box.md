@@ -163,9 +163,15 @@ First clone (2026-10-13): a 128 GB NVMe in a JMicron USB enclosure (`sda`,
 on a USB 2 port at 480 Mbit/s). 4.5 GB copied in 3m44s, services down 36 s,
 VersityGW xattrs identical. The same day the SD card was pulled and the box
 booted from the SSD (`/` = `sda2`, `/boot/firmware` = `sda1`, disk id
-`1cb25ccf`); box-health 18/18. The old SD card is a stale fallback: it
-lacks everything written since the clone, so re-clone onto it (or treat
-it as scratch) rather than booting it as-is.
+`1cb25ccf`); box-health 18/18. The old SD card then went into a Pi 4 and
+was turned into a separate host, `pi-blank` (not managed by this repo):
+CARE and the tunnel disabled, the tunnel credentials deleted, and a new
+hostname, `machine-id`, SSH host keys and Tailscale node. A clone keeps
+all of lumine's identities, so running both would put two boxes on the
+same tunnel (requests split between two databases) and the same Tailscale
+node. Do the same to any future clone that boots elsewhere. Wipe
+`/var/lib/tailscale/tailscaled.state` rather than running `tailscale
+logout`: logout revokes the node key, which lumine shares.
 
 Still to do: move the enclosure to a **blue USB 3 port** (it's on USB 2,
 480 Mbit/s), and get the Seeed M.2 HAT working (still `link down` on
