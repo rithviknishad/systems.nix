@@ -580,3 +580,13 @@ zram swap (2 GB) is the safety net; consider folding beat into the worker
   facility forms 500 when `actions` is omitted (backend fixture gap).
   The fork backend has no immunization/workspace APIs yet, so those
   screens' API calls 404 until it does.
+- 2026-10-13: **Backend: merge of upstream ENG-737 rolled back.** Upstream
+  `ohcnetwork/care@ENG-737` was merged into the fork branch and deployed by
+  mistake (the fork branch is the one to follow, as-is). Undone: `migrate
+  emr 0088_merge_20260820_1435` with the merged release (the 7 new
+  migrations were additive and their tables empty; target 0088, not the
+  fork's `0089_merge_*`, since upstream's 0089..0094 hang off 0088 on a
+  sibling branch), branch force-reset to `82ae319`, `box-deploy` back to
+  `82ae319bf02e-db7ccb62`; beat re-applied the no-op `0089_merge_*`.
+  Backups taken before each step. Nightly backups were missing for
+  2026-10-10..13 (avocado's journal no longer has those runs).
