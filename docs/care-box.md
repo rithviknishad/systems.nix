@@ -166,7 +166,7 @@ on a USB 2 port at 480 Mbit/s). 4.5 GB copied in 3m44s, services down 36 s,
 VersityGW xattrs identical. The same day the SD card was pulled and the box
 booted from the SSD (`/` = `sda2`, `/boot/firmware` = `sda1`, disk id
 `1cb25ccf`); box-health 18/18. The old SD card then went into a Pi 4 and
-was turned into a separate host, `pi-blank` (not managed by this repo):
+was turned into a separate host, `ephy` (not managed by this repo):
 CARE and the tunnel disabled, the tunnel credentials deleted, and a new
 hostname, `machine-id`, SSH host keys and Tailscale node. A clone keeps
 all of lumine's identities, so running both would put two boxes on the

@@ -590,11 +590,11 @@ zram swap (2 GB) is the safety net; consider folding beat into the worker
   `82ae319bf02e-db7ccb62`; beat re-applied the no-op `0089_merge_*`.
   Backups taken before each step. Nightly backups were missing for
   2026-10-10..13 (avocado's journal no longer has those runs).
-- 2026-10-13: **Old SD card -> pi-blank.** The user moved the SD card
+- 2026-10-13: **Old SD card -> ephy.** The user moved the SD card
   (stale lumine clone) into a Pi 4 and powered the Pi 5 off. It came up
   *as lumine*: same tailnet node (100.67.15.72) and serving
   care-box publicly through lumine's tunnel from the stale DB. Disabled
   CARE + cloudflared-lumine, deleted the tunnel credentials, renamed it
-  `pi-blank` (raspi-config), new machine-id + SSH host keys, wiped the
+  `ephy` (raspi-config), new machine-id + SSH host keys, wiped the
   tailscale state and re-registered it as a new node. lumine's node is
   untouched for the Pi 5; while it's off, its probes/backups fail.
