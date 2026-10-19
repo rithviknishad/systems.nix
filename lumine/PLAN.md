@@ -598,3 +598,18 @@ zram swap (2 GB) is the safety net; consider folding beat into the worker
   `ephy` (raspi-config), new machine-id + SSH host keys, wiped the
   tailscale state and re-registered it as a new node. lumine's node is
   untouched for the Pi 5; while it's off, its probes/backups fail.
+- 2026-10-19: **Tailnet origin: Tailscale Service `svc:care-box`**
+  (`https://care-box.orthrus-bass.ts.net`, fully same-origin, no Django
+  admin). nginx got a second loopback server (`:8080`) for tailscaled that
+  rewrites the public origin in `/api/` JSON and hands VersityGW the public
+  Host the URLs were signed for; the shared locations moved to
+  `snippets/care-box-static.conf`. SPA rebuilt with an empty
+  `REACT_CARE_API_URL` (relative API calls) and the logo as a `data:` URL
+  (zod 4 `z.url()` accepts it): `ca71d8b4a798-dded208d`. `box-provision`
+  serves + advertises the Service once lumine is tagged `tag:care-box`;
+  Gatus `care-box-tailnet` resolves it via 100.100.100.100. Public origin
+  unchanged (box-health public 4/4, local tailnet server + rewrite ok).
+  Tagged + approved by the user the same day (nothing routes to the VIP
+  until the host is approved). Verified from avocado: box-health 24/24,
+  v4 + v6, LE cert, presigned PUT/GET 200 through the ts.net name,
+  `/admin/` is the SPA. Gatus probe deployed (`kubectl apply -k`).
