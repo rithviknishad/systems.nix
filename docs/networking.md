@@ -93,6 +93,14 @@ backends are unreachable from the LAN/WAN.
 > klipper svclb for Traefik. A third tailnet HTTPS service must share an
 > existing port via path-based `serve` routes.
 
+{: .note }
+> **Tailscale Services sidestep that budget.** A
+> [Service](https://tailscale.com/kb/1552/tailscale-services) gets its own
+> VIP and MagicDNS name, so its `:443` doesn't collide with the host's. The
+> Raspberry Pi lumine publishes CARE that way, as `svc:care-box` at
+> `https://care-box.orthrus-bass.ts.net` (hosts must be tagged; see
+> [CARE in a box → Tailnet](care-box.md#tailnet-tailscale-service-svccare-box)).
+
 ## Cloudflare Tunnel (public access)
 
 `modules/cloudflared.nix` runs a named tunnel

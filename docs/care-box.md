@@ -24,6 +24,7 @@ The build-out plan, the decisions behind it and a dated status log live in
 | | |
 |---|---|
 | Public URL | `https://care-box.rithviknishad.dev` (lumine's own Cloudflare tunnel `lumine`) |
+| Tailnet URL | `https://care-box.orthrus-bass.ts.net`, the Tailscale Service `svc:care-box` ([Tailnet](#tailnet-tailscale-service-svccare-box)) |
 | Access | `ssh rithviknishad@lumine` (tailnet, `100.67.15.72`) or `lumine.local` (LAN) |
 | OS | Raspberry Pi OS (Debian 13 trixie, arm64), booted from a 128 GB NVMe SSD in a USB enclosure (`sda`); the SD card is out ([Moving to an SSD](#moving-to-an-ssd)) |
 | Control plane | this repo on avocado or the Mac (in the devshell): `just box-*` ssh to `rithviknishad@lumine`. Scripts and config are shipped to a root-owned `/usr/local/lib/care-box` on the box (`just box-sync`, run by every recipe that needs it) |
@@ -33,10 +34,12 @@ flowchart LR
     user["browser / ABDM gateway"] -->|HTTPS| cf[Cloudflare edge]
     cf -->|tunnel lumine| cfd[cloudflared]
     cfd --> nginx["nginx 127.0.0.1:80"]
-    nginx -->|"/api/"| api["care-api: gunicorn :9000"]
-    nginx -->|"/care-uploads/, /care-facility/"| vgw["VersityGW :7070"]
-    nginx -->|"/mfe-plugs/abdm/"| mfe["/opt/care/abdm-fe"]
-    nginx -->|"/"| spa["/opt/care/fe"]
+    tsuser["tailnet browser"] -->|"HTTPS, svc:care-box VIP"| tsd[tailscaled]
+    tsd --> nginxts["nginx 127.0.0.1:8080 (rewrites origin)"]
+    nginx & nginxts -->|"/api/"| api["care-api: gunicorn :9000"]
+    nginx & nginxts -->|"/care-uploads/, /care-facility/"| vgw["VersityGW :7070"]
+    nginx & nginxts -->|"/mfe-plugs/abdm/"| mfe["/opt/care/abdm-fe"]
+    nginx & nginxts -->|"/"| spa["/opt/care/fe"]
     api & worker[care-worker] & beat["care-beat (migrates)"] --> pg[(postgres 17)] & redis[(redis 8)]
     api --> vgw
     worker -->|"SMTP over the tailnet"| mailpit[avocado Mailpit]
@@ -45,7 +48,7 @@ flowchart LR
 Bring-up on a fresh box, in order, from avocado (everything is idempotent):
 
 ```sh
-just box-provision         # packages, users, units, nginx site, tunnel config
+just box-provision         # packages, users, units, nginx sites, tunnel config, svc:care-box
 just box-secrets-render    # decrypt here, render there; starts versitygw + the tunnel
 just box-deploy            # build the backend, migrate, start care.target
 just box-buckets           # buckets + the care-facility policy
@@ -78,8 +81,8 @@ over the tailnet (passwordless sudo there):
 
 | Recipe | What |
 |---|---|
-| `just box-status` | units, running revisions (backend, SPA, MFE, ops scripts), memory, disk, temperature + throttling |
-| `just box-health` | every unit active and none failed, postgres/redis/VersityGW/gunicorn/nginx on the box, then the public URL end to end. Non-zero exit on any failure |
+| `just box-status` | units, running revisions (backend, SPA, MFE, ops scripts), `tailscale serve status`, memory, disk, temperature + throttling |
+| `just box-health` | every unit active and none failed, postgres/redis/VersityGW/gunicorn/both nginx servers (incl. the tailnet server's origin rewrite) on the box, then the public URL and the tailnet URL end to end. Non-zero exit on any failure |
 | `just box-start` / `box-stop` / `box-restart` | the backend (`care.target`: beat, API, worker). Start/restart wait for beat's migrations and then for gunicorn to answer. Postgres, redis, VersityGW, nginx and the tunnel keep running |
 | `just box-offline` / `box-online` | stop/start the tunnel: the public URL goes down (Cloudflare's 530 page) while the box stays up |
 | `just box-logs [unit]` | follow `care-*` (or any unit's) journal |
@@ -319,14 +322,19 @@ avocado** (it needs docker and the RAM):
   doesn't have yet, so their calls 404 for now. avocado's own SPA stays on
   `bodhi/questionnaire-actions`)
   with the same
-  `.env.local` as `care-fe-image`, but with
-  `REACT_CARE_API_URL=https://care-box.rithviknishad.dev`
-  (+ `REACT_MFE_REGISTERED_COMPONENTS=AddFacilitySheet`) and the care-box
-  logo as the state logo (`REACT_STATE_LOGO`, a JSON string
-  `{"light": ..., "dark": ...}`, single-quoted in `.env.local` so dotenv
-  keeps it intact). care_fe's `scripts/validate-env.ts` fails the build
-  unless both are **absolute** URLs, so they are
-  `https://care-box.rithviknishad.dev/images/CareOnABox_flat.svg`;
+  `.env.local` as `care-fe-image`, but with an **empty
+  `REACT_CARE_API_URL`** (care_fe's `scripts/validate-env.ts` allows `""`):
+  API calls are relative, so the one build is same-origin on both of
+  care-box's names (public and tailnet), and plugins get
+  `window.CARE_API_URL = ""` too
+  (+ `REACT_MFE_REGISTERED_COMPONENTS=AddFacilitySheet`);
+- sets the care-box logo as the state logo (`REACT_STATE_LOGO`, a JSON
+  string `{"light": ..., "dark": ...}`, single-quoted in `.env.local` so
+  dotenv keeps it intact). `validate-env.ts` fails the build unless both are
+  **absolute** URLs (zod `z.url()`), which would tie the logo to one origin,
+  so it's inlined as a `data:image/svg+xml;base64,...` URL generated from
+  `lumine/care_fe/public/images/CareOnABox_flat.svg` (~16 KB, in the bundle
+  once). The SPA's CSP (report-only) allows `data:` images for it;
 - sets the login page's `REACT_CUSTOM_DESCRIPTION` ("running on a
   Raspberry Pi 5 (2GB)" + a link to this page). care_fe renders it as
   GitHub-flavoured markdown at build time (bare URLs become links) and
@@ -375,18 +383,24 @@ pictures as plain unsigned URLs. Listing stays denied on both. The
 gateway's own bookkeeping (`.vgwlocks/`, `<bucket>/.sgwtmp/`) lives in the
 same tree; those files aren't objects.
 
-### nginx: one origin, path-routed
+### nginx: two origins, path-routed
 
 `lumine/nginx/care-box.conf` (installed to `/etc/nginx/conf.d/` by
-`box-provision`, which runs `nginx -t` and restores the previous site if
+`box-provision`, which runs `nginx -t` and restores the previous file if
 the test fails) mirrors avocado's `care` Ingress. Paths are forwarded
-unmodified, and it listens on **127.0.0.1:80 only**: cloudflared is its
-sole client.
+unmodified. It has two servers, both on **loopback only**: the public one on
+`127.0.0.1:80`, whose sole client is cloudflared, and the tailnet one on
+`127.0.0.1:8080` for tailscaled ([Tailnet](#tailnet-tailscale-service-svccare-box)).
+Everything that doesn't depend on the hostname (the MFE and SPA locations
+below, mime types, body size) is shared from
+`lumine/nginx/snippets/care-box-static.conf` → `/etc/nginx/snippets/`
+(not `conf.d/`, which nginx would load as a top-level file). The public
+server:
 
 | Path | Goes to | Notes |
 |---|---|---|
 | `/api/` | gunicorn `127.0.0.1:9000` | SPA API + ABDM callbacks. Requests are buffered, which keeps slow clients off the sync workers. `X-Forwarded-Proto` is passed through from cloudflared (`https`) |
-| `/care-uploads`, `/care-facility` (+ `/…`) | VersityGW `127.0.0.1:7070` | **`Host` preserved** (SigV4 signs it). Request/response bodies are streamed, not spooled to the SD card. Also matches bucket-level paths, so an anonymous LIST gets the gateway's 403 rather than the SPA |
+| `/care-uploads`, `/care-facility` (+ `/…`) | VersityGW `127.0.0.1:7070` | **`Host` preserved** (SigV4 signs it). Request/response bodies are streamed, not spooled to disk. Also matches bucket-level paths, so an anonymous LIST gets the gateway's 403 rather than the SPA |
 | `/mfe-plugs/abdm/` | `/opt/care/abdm-fe/current/html` | rules of `k8s/care/abdm-fe/nginx.conf`: `remoteEntry.js` `no-cache`, hashed assets immutable, `.js`/`.mjs` as `text/javascript`, misses 404 |
 | `/` | `/opt/care/fe/current/html` | rules of care_fe's own `nginx/nginx.conf`: its security headers (HSTS, `X-Frame-Options`, CSP report-only, ...), 7d caching (6h for `index.html`), SPA fallback to `index.html` |
 
@@ -394,9 +408,9 @@ sole client.
 SPA's security headers are scoped to `/`, so API and MFE responses don't
 get them, the same as on avocado, where they come from care_fe's own nginx.
 
-**Django admin is not reachable at all** (decision 2026-10-07). Only `/api/`
-reaches the backend, so `/admin/*` on the public origin is the SPA's own
-admin UI. Plain `http://lumine:<port>` wouldn't work anyway, because the
+**Django admin is not reachable at all** (decision 2026-10-07, and again
+for the tailnet Service on 2026-10-19). Only `/api/` reaches the backend, on
+both servers, so `/admin/*` is the SPA's own admin UI there. Plain `http://lumine:<port>` wouldn't work anyway, because the
 deployment settings mark the session and CSRF cookies `Secure`. If it's ever
 needed, the zero-exposure way in is an SSH tunnel to gunicorn,
 `ssh -L 8000:127.0.0.1:9000 lumine`, then `http://localhost:8000/admin/`.
@@ -431,6 +445,103 @@ origin, URLs carry `X-Amz-Algorithm=AWS4-HMAC-SHA256`, stored Content-Type
 round-trips (xattrs work), anonymous GET 403 on `care-uploads` / 200 on
 `care-facility`, anonymous LIST 403 on both. The same checks avocado passed
 after its VersityGW switch.
+
+### Tailnet: Tailscale Service `svc:care-box`
+
+The same app is also on the tailnet, at
+**`https://care-box.orthrus-bass.ts.net`**, as the
+[Tailscale Service](https://tailscale.com/kb/1552/tailscale-services)
+`svc:care-box` (decision 2026-10-19). A Service has its own tailnet IP (VIP)
+and MagicDNS name, separate from lumine's, and shows up in clients' list of
+services, so it's discoverable without knowing which machine hosts it.
+tailscaled on lumine terminates TLS with a tailnet Let's Encrypt certificate
+for that name and proxies to nginx's tailnet server on `127.0.0.1:8080`.
+Nothing new listens off loopback, so the firewall is unchanged. **Django
+admin isn't exposed** here either.
+
+**One-time tailnet setup (admin console):**
+
+1. **Services** → define `svc:care-box`, endpoint `tcp:443`.
+2. **Machines** → lumine → *Edit ACL tags* → `tag:care-box`. Only tagged
+   nodes can host a Service. Tagging turns lumine into a tagged device
+   (owned by the tailnet rather than a user, key expiry off).
+3. **Access controls**: the tag's owner, auto-approval of the Service host,
+   and the grants. The last three grants keep what lumine already did
+   working once it's tagged (they're redundant while the policy still has an
+   allow-all rule; the Service grant is needed either way):
+
+   ```jsonc
+   "tagOwners": { "tag:care-box": ["autogroup:admin"] },
+   "autoApprovers": { "services": { "svc:care-box": ["tag:care-box"] } },
+   "grants": [
+     // Use the app: people, and avocado (Gatus, box-health).
+     { "src": ["autogroup:member", "tag:ssh-avocado"], "dst": ["svc:care-box"], "ip": ["tcp:443"] },
+     // avocado: box-* SSH, the backup pull, the metrics scrape.
+     { "src": ["tag:ssh-avocado"], "dst": ["tag:care-box"], "ip": ["tcp:22", "tcp:9100", "tcp:9113", "tcp:9121", "tcp:9187", "tcp:9256", "tcp:9300"] },
+     // Your devices: SSH (box-* from the Mac).
+     { "src": ["autogroup:member"], "dst": ["tag:care-box"], "ip": ["tcp:22"] },
+     // lumine's email goes to avocado's Mailpit.
+     { "src": ["tag:care-box"], "dst": ["tag:ssh-avocado"], "ip": ["tcp:1025"] }
+   ]
+   ```
+
+Then `just box-provision`. Its last step (skipped, with a warning, while
+lumine is untagged) runs
+`tailscale serve --service=svc:care-box --https=443 http://127.0.0.1:8080`
+unless that exact config is already in place, and re-advertises the Service
+if it was drained. tailscaled persists both across restarts. It uses the
+CLI because `tailscale serve set-config` files can't express "HTTPS on 443
+to a plain-HTTP backend" (the target's scheme decides the listener's).
+
+**Same-origin without touching the backend.** The backend keeps building
+every absolute URL from the public origin (`CURRENT_DOMAIN`,
+`BUCKET_EXTERNAL_ENDPOINT`): emails and ABDM callbacks must point there. On
+the tailnet name:
+
+- the SPA calls the API relatively (empty `REACT_CARE_API_URL`,
+  [Frontend](#frontend)), and its logo is a `data:` URL;
+- nginx's tailnet server rewrites `https://care-box.rithviknishad.dev` to
+  `https://care-box.orthrus-bass.ts.net` in `/api/` responses (`sub_filter`
+  on JSON, with `Accept-Encoding` cleared so it can see the bodies). That
+  covers presigned upload/download URLs, facility covers and the ABDM
+  plug's `remoteEntry.js` URL in `/api/v1/plug_config/`;
+- the bucket locations pass **`Host: care-box.rithviknishad.dev`** to
+  VersityGW: the URL's host was rewritten, but its SigV4 signature covers the
+  public host it was signed for;
+- Django needs nothing: `DJANGO_ALLOWED_HOSTS` is `*`, and the CSRF origin
+  check passes for same-origin HTTPS (`X-Forwarded-Proto: https`, set by
+  nginx, trusted via `SECURE_PROXY_SSL_HEADER`). The SPA uses JWTs anyway.
+
+Caveats:
+
+- A tailnet client that *saves* data containing a rewritten URL stores the
+  ts.net one (e.g. editing a plug_config through the tailnet name).
+  Normal clinical data has no such URLs.
+- ABDM's gateway can only reach the public origin; the tailnet name is for
+  people.
+- Clients on Tailscale **1.94+** reach Service VIPs out of the box. Older
+  Linux clients need `tailscale set --accept-routes`.
+- Pods can't resolve MagicDNS through cluster DNS, but avocado's tailscaled
+  answers `100.100.100.100` for them too, which is how Gatus probes the name
+  ([Uptime](#metrics)).
+
+Withdraw it temporarily with `ssh lumine sudo tailscale serve drain
+svc:care-box` (the next `box-provision` re-advertises it); remove it for good
+by dropping the provision step and running
+`sudo tailscale serve clear svc:care-box`.
+
+The tailnet assigns the VIP (`100.112.78.131`,
+`fd7a:115c:a1e0::7838:4e84`) when the Service is defined. Hosts become
+reachable only once **approved**: until then lumine's peers don't get a
+route to the VIP, and connections time out even though the name resolves.
+
+**Verified (2026-10-19, from avocado over the tailnet):** SPA, plug list,
+`/api/abdm/health` and the MFE 200 over both IPv4 and IPv6; Let's Encrypt
+cert for `care-box.orthrus-bass.ts.net`; the plug list's ABDM URL comes
+back on the ts.net origin; `/admin/` and `/admin/login/` are the SPA.
+CARE's own presigned PUT + GET (`S3FilesManager`'s client config, URL host
+rewritten as the tailnet server does) 200 through the ts.net name, and the
+Content-Type and `Content-Disposition` round-trip.
 
 ## Data and ABDM
 
@@ -613,7 +724,11 @@ through ntfy: `care-box-fe` (SPA + certificate > 10 days), `care-box-api`
 (`/api/v1/plug_config/` lists `abdm`: gunicorn, DB and the plug_config),
 `care-box-abdm` (`/api/abdm/health`) and `care-box-abdm-fe` (the MFE's
 `remoteEntry.js`). Not `/ping/`: only `/api/` reaches the backend here, so
-the SPA's fallback would answer it with a 200. The app gallery
+the SPA's fallback would answer it with a 200. `care-box-tailnet` probes the
+[tailnet Service](#tailnet-tailscale-service-svccare-box)'s plug list, with
+Gatus resolving through `100.100.100.100`: the Service is up, avocado is
+allowed in, its ts.net certificate has > 10 days left, and the ABDM URL
+comes back rewritten to the tailnet origin. The app gallery
 (`apps.rithviknishad.dev`) has a static **CARE box** tile with a
 `siteMonitor` status dot ([Apps](apps.md)).
 
@@ -648,3 +763,7 @@ the SPA's fallback would answer it with a 200. The app gallery
 - **Scripts behind Cloudflare need a User-Agent.** Python's `urllib`
   default (`Python-urllib/3.x`) gets `403 error code: 1010` at the edge
   (`python-requests` and curl pass).
+- **On tagged lumine, change Tailscale settings with `tailscale set`, not
+  `tailscale up`.** `up` resets every unspecified flag, and one without
+  `--advertise-tags=tag:care-box` tries to drop the tag and re-authenticate,
+  taking the Service (and the SSH grants) with it.

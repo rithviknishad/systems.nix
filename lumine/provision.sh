@@ -2,8 +2,9 @@
 # Base system for CARE in a box on lumine (lumine/PLAN.md, docs/care-box.md):
 # packages, the cloudflared apt repo, the pinned VersityGW binary, the
 # `care` and `versitygw` users and their directories, Postgres tuning and the
-# `care` role/db, the systemd units in lumine/systemd/, the nginx site and the
-# cloudflared config. Secrets are separate: lumine/render-secrets.sh.
+# `care` role/db, the systemd units in lumine/systemd/, the nginx sites, the
+# cloudflared config and the Tailscale Service svc:care-box. Secrets are
+# separate: lumine/render-secrets.sh.
 #
 # Idempotent: every step compares against the current state and only changes
 # what differs, so re-running it is safe and is how edits under lumine/ get
@@ -237,25 +238,61 @@ systemctl enable --quiet versitygw.service cloudflared-lumine.service
 systemctl enable --quiet --now rpi-metrics.timer
 
 # --- nginx + cloudflared config -------------------------------------------------
-# An invalid site must not take nginx down: test it, and put the previous
-# version back if the test fails.
-for conf in care-box.conf stub-status.conf; do
-  site=/etc/nginx/conf.d/$conf
+# An invalid file must not take nginx down: test it, and put the previous
+# version back if the test fails. The snippet goes first: the new
+# care-box.conf includes it.
+for conf in snippets/care-box-static.conf conf.d/care-box.conf conf.d/stub-status.conf; do
+  site=/etc/nginx/$conf
   rm -f "$tmp/site.bak"
   if [ -f "$site" ]; then cp -p "$site" "$tmp/site.bak"; fi
-  if put "$here/nginx/$conf" "$site" 644; then
+  if put "$here/nginx/${conf#conf.d/}" "$site" 644; then
     if nginx -t 2>"$tmp/nginx-t"; then
       systemctl reload nginx
     else
       cat "$tmp/nginx-t" >&2
       if [ -f "$tmp/site.bak" ]; then cp -p "$tmp/site.bak" "$site"; else rm -f "$site"; fi
-      echo "provision.sh: nginx rejected lumine/nginx/$conf; previous version kept" >&2
+      echo "provision.sh: nginx rejected lumine/nginx/${conf#conf.d/}; previous version kept" >&2
       exit 1
     fi
   fi
 done
 if put "$here/cloudflared/config.yml" /etc/cloudflared/config.yml 644; then
   systemctl try-restart cloudflared-lumine.service
+fi
+
+# --- Tailscale Service svc:care-box -------------------------------------------
+# https://care-box.orthrus-bass.ts.net on the tailnet: tailscaled terminates
+# TLS on the Service's own VIP and proxies to nginx's tailnet server on
+# 127.0.0.1:8080 (so no firewall rule: nothing new listens off loopback).
+# Only tagged nodes can host a Service, and the tag (tag:care-box) is applied
+# in the admin console, so until then this is skipped rather than failed.
+# The CLI, not `tailscale serve set-config`: a config file can't say "HTTPS
+# on 443 to a plain-HTTP backend". tailscaled persists it across restarts.
+# See docs/care-box.md ("Tailnet: svc:care-box").
+ts_svc=svc:care-box
+ts_backend=http://127.0.0.1:8080
+if ! tailscale status --self --json |
+  python3 -c 'import json, sys; sys.exit(0 if json.load(sys.stdin)["Self"].get("Tags") else 1)'; then
+  echo "provision.sh: lumine is not a tagged node; skipping Tailscale Service $ts_svc" >&2
+else
+  # Exactly: TCP 443 as HTTPS, one web listener on :443 whose only handler
+  # proxies / to nginx.
+  if ! tailscale serve status --json | python3 -c '
+import json, sys
+svc = (json.load(sys.stdin).get("Services") or {}).get(sys.argv[1]) or {}
+web = [w for hp, w in (svc.get("Web") or {}).items() if hp.endswith(":443")]
+ok = ((svc.get("TCP") or {}).get("443") or {}).get("HTTPS") is True and \
+  len(web) == 1 and web[0].get("Handlers") == {"/": {"Proxy": sys.argv[2]}}
+sys.exit(0 if ok else 1)' "$ts_svc" "$ts_backend"; then
+    tailscale serve --service="$ts_svc" --https=443 "$ts_backend"
+    log "serving $ts_svc on https:443 -> $ts_backend"
+  fi
+  # Advertised = this node offers it (a `tailscale serve drain` withdraws it).
+  if ! tailscale debug prefs |
+    python3 -c 'import json, sys; sys.exit(0 if sys.argv[1] in (json.load(sys.stdin).get("AdvertiseServices") or []) else 1)' "$ts_svc"; then
+    tailscale serve advertise "$ts_svc"
+    log "advertised $ts_svc"
+  fi
 fi
 
 # --- metrics exporters -----------------------------------------------------------

@@ -844,6 +844,8 @@ apps-dns:
 box_ssh    := "rithviknishad@lumine"
 box_ops    := "/usr/local/lib/care-box"
 box_origin := "https://care-box.rithviknishad.dev"
+# The Tailscale Service svc:care-box (tailnet only; see docs/care-box.md).
+box_ts_origin := "https://care-box.orthrus-bass.ts.net"
 
 # Root-owned and read-only to everyone else: root runs these, so the care
 # user (which owns /opt/care) must not be able to rewrite them. PLAN.md stays
@@ -995,6 +997,8 @@ box-status:
       grep -E '^(repo|ref|sha|systems.nix)=' /opt/care/$d/current/REVISION 2>/dev/null || echo "not deployed"
     done
     echo "--- ops scripts: systems.nix $(cat /usr/local/lib/care-box/SYSTEMS_NIX_REVISION 2>/dev/null || echo 'not synced')"
+    echo "--- tailscale serve (svc:care-box)"
+    tailscale serve status
     echo "--- system"
     uptime
     free -h
@@ -1003,9 +1007,10 @@ box-status:
     EOF
 
 # Every unit active and nothing failed, the local endpoints (postgres, redis,
-# VersityGW, gunicorn, nginx) on the box, then the public URL end to end
-# through Cloudflare. Exits non-zero if anything is down, so it's scriptable.
-# Health-check care-box: units + local endpoints on lumine, then the public URL.
+# VersityGW, gunicorn, both nginx origins) on the box, then the public URL
+# end to end through Cloudflare and the tailnet Service through tailscaled.
+# Exits non-zero if anything is down, so it's scriptable.
+# Health-check care-box: units + local endpoints on lumine, then both URLs.
 box-health:
     #!/usr/bin/env bash
     set -uo pipefail
@@ -1024,11 +1029,17 @@ box-health:
     check "versitygw /health" curl -fsS -m 5 http://127.0.0.1:7070/health
     check "gunicorn /api/v1/plug_config/" curl -fsS -m 10 -H "$host" http://127.0.0.1:9000/api/v1/plug_config/
     check "nginx / (SPA)" curl -fsS -m 5 -H "$host" http://127.0.0.1/
+    ts='Host: care-box.orthrus-bass.ts.net'
+    check "nginx tailnet / (SPA)" curl -fsS -m 5 -H "$ts" http://127.0.0.1:8080/
+    # The plug list carries the public origin; this server must rewrite it.
+    check "nginx tailnet API rewrites the origin" sh -c "curl -fsS -m 10 -H '$ts' http://127.0.0.1:8080/api/v1/plug_config/ | grep -q 'care-box.orthrus-bass.ts.net/mfe-plugs/'"
     exit $rc
     EOF
-    echo "--- public ({{box_origin}})"
-    for path in / /api/v1/plug_config/ /api/abdm/health /mfe-plugs/abdm/assets/remoteEntry.js; do
-      if curl -fsS -m 15 -o /dev/null "{{box_origin}}$path"; then echo "  ok    $path"; else echo "  FAIL  $path"; rc=1; fi
+    for o in {{box_origin}} {{box_ts_origin}}; do
+        echo "--- $o"
+        for path in / /api/v1/plug_config/ /api/abdm/health /mfe-plugs/abdm/assets/remoteEntry.js; do
+            if curl -fsS -m 15 -o /dev/null "$o$path"; then echo "  ok    $path"; else echo "  FAIL  $path"; rc=1; fi
+        done
     done
     exit $rc
 
@@ -1065,10 +1076,10 @@ box-backups:
 
 # Run ON AVOCADO: the Vite build needs ~4 GB of RAM and lumine has 2 GB, while
 # the output is architecture-independent static files. Builds care_fe at the
-# head of `ref` with the care-box origin baked in (same .env.local as
-# care-fe-image, plus the care-box logo and login-page description) and
-# lumine/care_fe/ overlaid on the checkout (files under public/ are served
-# from /), and the ABDM MFE from
+# head of `ref` with no origin baked in (relative API URL; otherwise the
+# same .env.local as care-fe-image, plus the care-box logo and login-page
+# description) and lumine/care_fe/ overlaid on the checkout (files under
+# public/ are served from /), and the ABDM MFE from
 # k8s/care/abdm-fe at the sha pinned in additional-plugs.json (identical to
 # avocado's: the MFE bakes in no origin).
 # Copies the files out of the images and rsyncs them to lumine as
@@ -1080,16 +1091,18 @@ box-backups:
 box-fe ref="3.1/immunization-policies" repo="ohcnetwork/care_fe":
     #!/usr/bin/env bash
     set -euo pipefail
-    # REACT_*_LOGO is a JSON string; single quotes keep dotenv from touching it.
-    # scripts/validate-env.ts fails the build unless light/dark are absolute
-    # URLs (z.url()), so the overlay's /images/ path gets the box origin.
-    envlocal=$(cat <<'EOF'
-    REACT_CARE_API_URL={{box_origin}}
-    REACT_MFE_REGISTERED_COMPONENTS=AddFacilitySheet
-    REACT_STATE_LOGO='{"light": "{{box_origin}}/images/CareOnABox_flat.svg", "dark": "{{box_origin}}/images/CareOnABox_flat.svg"}'
-    REACT_CUSTOM_DESCRIPTION="This instance of CARE is running on **Raspberry Pi 5 (2GB)**. Read more at: https://rithviknishad.github.io/systems.nix/care-box.html"
-    EOF
-    )
+    # Same-origin on BOTH of care-box's names (public + the tailnet Service):
+    # an empty REACT_CARE_API_URL (validate-env.ts allows "") makes API calls
+    # relative to whichever name the SPA was loaded from. REACT_*_LOGO is a
+    # JSON string, single-quoted so dotenv leaves it alone; validate-env.ts
+    # fails the build unless light/dark are absolute URLs (z.url()), so the
+    # logo is inlined as a data: URL rather than tied to one origin.
+    logo="data:image/svg+xml;base64,$(base64 <lumine/care_fe/public/images/CareOnABox_flat.svg | tr -d '\n')"
+    envlocal=$(printf '%s\n' \
+        'REACT_CARE_API_URL=' \
+        'REACT_MFE_REGISTERED_COMPONENTS=AddFacilitySheet' \
+        "REACT_STATE_LOGO='{\"light\": \"$logo\", \"dark\": \"$logo\"}'" \
+        'REACT_CUSTOM_DESCRIPTION="This instance of CARE is running on **Raspberry Pi 5 (2GB)**. Read more at: https://rithviknishad.github.io/systems.nix/care-box.html"')
     overlay=lumine/care_fe
     sha=$(git ls-remote https://github.com/{{repo}} refs/heads/{{ref}} | cut -f1)
     [ -n "$sha" ] || { echo "no branch {{ref}} in {{repo}}" >&2; exit 1; }
