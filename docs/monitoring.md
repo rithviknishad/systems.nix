@@ -12,8 +12,8 @@ It's built on **VictoriaMetrics** (a Prometheus-compatible TSDB), **Grafana**,
 push notifications. It lives in `k8s/monitoring/` and mirrors
 [`tellmeY18/retire.nix`](https://github.com/tellmeY18/retire.nix), adapted
 to this cluster: avocado runs the whole stack, and the k3s agents
-([g8way, headless](nodes.md)) are watched through their node-exporter and
-Vector.
+([g8way, headless](nodes.md)) are watched through their node-exporter,
+Vector, and Gatus probes.
 
 ## Big picture
 
@@ -334,6 +334,7 @@ group (`ui.default-sort-by: group`):
 | `public` | `rithviknishad.dev`, `photos.rithviknishad.dev` (Immich `/api/server/ping`), `kite.rithviknishad.dev` (`/healthz`), `suchi.rithviknishad.dev` (`/readyz`), `mailpit.rithviknishad.dev` (`/readyz`), `apps.rithviknishad.dev` ([app gallery](apps.md) `/api/healthcheck`) | 200 + body + TLS-expiry | `avocado-alerts` |
 | `ohcnetwork/care` | CARE public edges (`care-api /ping/`, SPA, `/api/abdm/health`, ABDM MFE `remoteEntry.js`, gateway `/`, devices MFE `/health`) + in-cluster (VersityGW, middleware, RTSPtoWeb) | 200 (+ TLS-expiry on public) | `avocado-alerts` |
 | `ohcnetwork/teleicu/cameras` | Mock PTZ camera (in-cluster + public edge) and the physical ONVIF cameras (`matrix-cctv`, `prama-cctv`, `cpplus-cctv`) as raw TCP connects to RTSP `:554` | mock: reachable + non-5xx; physical: `[CONNECTED] == true` | `avocado-alerts` |
+| `nodes` | The k3s agents [g8way and headless](nodes.md): node-exporter's `http://<host>.orthrus-bass.ts.net:9100/`, every 1m | `[STATUS] == 200` (host + tailnet up) | `avocado-alerts` |
 | `ABDM-SBX` | ABDM **sandbox**: NHPR (`/v4/`) / ABHA / HIECM | reachable + non-5xx | `avocado-abdm` (prio 4) |
 | `ABDM-LIVE` | ABDM **live**: NHPR (`/v4/`) / ABHA / HIECM | reachable + non-5xx | `avocado-abdm` (prio 5) |
 
@@ -343,6 +344,13 @@ The ABDM entries are third-party APIs we don't own, so their checks assert only
 `avocado-abdm` topic via ntfy `overrides`. Dashboard at
 `https://status.rithviknishad.dev`, on the tailnet via
 `curl -H "Host: status.rithviknishad.dev" http://avocado`, or `just mon-gatus`.
+
+The `nodes` probes go by **MagicDNS name**, resolved through
+`client.dns-resolver: udp://100.100.100.100:53` (pods can't use MagicDNS
+otherwise), so a re-registered node's new tailnet IP doesn't break them. That
+resolver option only applies to HTTP checks; Gatus's `tcp://` checks dial with
+the system resolver, so a `tcp://g8way...:22` probe wouldn't resolve. They
+flag a node within ~3 minutes, versus `KubeNodeNotReady`'s 15m `for`.
 
 ## Notifications (ntfy.sh)
 
@@ -354,7 +362,7 @@ Two independent pipelines push to ntfy across two topics:
 
 | Topic | Fed by |
 |---|---|
-| `avocado-alerts` | Alertmanager bridge + Gatus `internal`/`public`/`ohcnetwork/care` groups |
+| `avocado-alerts` | Alertmanager bridge + Gatus `internal`/`public`/`ohcnetwork/*`/`nodes` groups |
 | `avocado-abdm` | Gatus `ABDM-SBX`/`ABDM-LIVE` groups (third-party, kept separate) |
 
 > Topic names are set in `ntfy-alertmanager.yaml` and `gatus.yaml` (top-level

@@ -524,6 +524,38 @@ data:
         alerts:
           - type: ntfy
 
+      # --- k3s agent nodes (docs/nodes.md) -----------------------------------
+      # "Is the box up and reachable over the tailnet?" for the agents (avocado
+      # runs Gatus, so it can't usefully probe itself). Faster and independent
+      # of the in-cluster alert path, vs KubeNodeNotReady's 15m `for`.
+      # node-exporter's HTTP root is the target: it runs hostNetwork on every
+      # node, so a 200 means the host and its tailnet link are up (kubelet
+      # health is KubeNodeNotReady's job).
+      # By MagicDNS name, not 100.x, so a re-registered node's new IP doesn't
+      # break it. Not tcp://:22 — Gatus's TCP check dials with the system
+      # resolver and ignores dns-resolver, and pods can't resolve ts.net.
+      - name: g8way
+        group: nodes
+        url: "http://g8way.orthrus-bass.ts.net:9100/"
+        interval: 1m
+        client:
+          dns-resolver: "udp://100.100.100.100:53"
+        conditions:
+          - "[STATUS] == 200"
+        alerts:
+          - type: ntfy
+
+      - name: headless
+        group: nodes
+        url: "http://headless.orthrus-bass.ts.net:9100/"
+        interval: 1m
+        client:
+          dns-resolver: "udp://100.100.100.100:53"
+        conditions:
+          - "[STATUS] == 200"
+        alerts:
+          - type: ntfy
+
       # --- ABDM sandbox (third-party, not ours) ------------------------------
       # External ABDM APIs we don't control. "Up" = the host is REACHABLE and
       # not returning a server error: [CONNECTED] guards the unreachable case
@@ -612,7 +644,7 @@ spec:
         app.kubernetes.io/name: gatus
       annotations:
         # Bump to roll the pod when the config changes.
-        checksum/config: config-v38
+        checksum/config: config-v39
     spec:
       securityContext:
         runAsNonRoot: true

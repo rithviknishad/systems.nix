@@ -125,7 +125,7 @@ reinstall.
 | 1 | Minimal NixOS via nixos-anywhere: SSH, ZFS, user, mDNS | **Done** on both |
 | 2 | Layers: sops, password, Tailscale, (g8way) desktop + Home Manager + jumpbox tools | **Done** on both (g8way's desktop/jumpbox deployed 2026-11-04) |
 | 3 | Join both as k3s agents over the tailnet (tainted, opt-in only) | **Done** 2026-11-04 (avocado needed a one-off `--cluster-reset`, see below) |
-| 4 | Gatus probes + alerts for the new nodes | Planned |
+| 4 | Monitoring for the new nodes: host ZFS/SMART metrics, Vector logs, Gatus probes | **Done** 2026-11-04 |
 
 ### Phase 1: minimal install (done)
 
@@ -242,6 +242,9 @@ Monitoring for g8way and headless (`k8s/monitoring/`, `modules/monitoring.nix`):
   [Monitoring](monitoring.md#smart-smart-vmrulesyaml).
 - **Logs.** Vector tolerates the opt-in taint, so pod logs on the agents are
   shipped to VictoriaLogs too.
+- **Uptime.** Gatus probes each agent's node-exporter by MagicDNS name (group
+  `nodes`), which flags a dead or unreachable node in ~3 minutes. See
+  [Monitoring](monitoring.md#uptime-gatus).
 - **Node down.** No new rules needed: the chart's defaults already cover the
   agents (`KubeNodeNotReady`, `KubeNodeUnreachable`, `KubeletDown`, and
   `TargetDown` for their node-exporter), as do the node-exporter rules
