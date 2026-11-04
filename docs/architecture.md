@@ -9,6 +9,14 @@ nav_order: 2
 This page is the end-to-end mental model of `avocado`. Everything else is
 detail on one of these layers.
 
+{: .note }
+> **The flake now holds three hosts.** `avocado` (below) is still the only k3s
+> server and runs every workload. `g8way` (NUC jumpbox) and `headless`
+> (disposable laptop) are k3s agents. Both run NixOS with sops and Tailscale,
+> and g8way has a Cinnamon jumpbox desktop. Since 2026-11-04 they've been
+> joined to k3s over the tailnet, tainted opt-in only. See [Cluster nodes](nodes.md) for the
+> hosts, the rollout history, and how scheduling keeps workloads on avocado.
+
 ## The layers
 
 `avocado` is a single physical machine wearing several hats at once:
@@ -45,6 +53,7 @@ flowchart LR
     flake[flake.nix]
 
     flake --> nixos[nixosConfigurations.avocado]
+    flake --> others[nixosConfigurations.g8way + headless]
     flake --> home[homeConfigurations.rithviknishad@avocado]
     flake --> shell[devShells.default]
 
@@ -52,6 +61,10 @@ flowchart LR
     nixos --> disko[hosts/avocado/disko.nix]
     nixos --> mods[modules/*.nix]
     nixos --> user[users/rithviknishad.nix]
+
+    others --> otherhosts[hosts/g8way, hosts/headless]
+    otherhosts --> mods
+    otherhosts --> user
 
     mods --> hm[modules/home-manager.nix]
     hm --> homeprofile[home/rithviknishad]
@@ -129,9 +142,10 @@ flowchart LR
     runsecrets --> svc[Services: user password, tailscale, k3s, cloudflared]
 ```
 
-Everything sensitive is committed **encrypted**. The box decrypts at activation
-using its own age key at `/var/lib/sops-nix/key.txt` (never in the repo). Full
-details on the [Secrets](secrets.md) page.
+Everything sensitive is committed **encrypted**. avocado decrypts at activation
+using its own age key at `/var/lib/sops-nix/key.txt` (never in the repo); the
+newer hosts decrypt with their SSH host key and read their own
+`secrets/<hostname>.yaml`. Full details on the [Secrets](secrets.md) page.
 
 ## Design decisions worth knowing
 

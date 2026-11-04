@@ -33,6 +33,16 @@
   # desktop; now enabled explicitly — `nmcli`/`nmtui` over SSH).
   networking.networkmanager.enable = true;
 
+  # mDNS on the LAN NIC only (see modules/avahi.nix).
+  services.avahi.allowInterfaces = [ "enp2s0" ];
+
+  # sops: avocado decrypts with a dedicated age key provisioned out-of-band
+  # (never in the repo), not its SSH host key — see modules/sops.nix.
+  sops.age = {
+    keyFile = "/var/lib/sops-nix/key.txt";
+    generateKey = false;
+  };
+
   # The NixOS release this config was authored against. Do not change
   # casually after install — it governs stateful defaults.
   system.stateVersion = "26.11";

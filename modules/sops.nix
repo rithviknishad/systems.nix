@@ -1,36 +1,30 @@
 #
-# sops-nix: encrypted secrets management.
+# sops-nix: encrypted secrets management (host-agnostic).
 #
-# Secrets live in ../secrets/avocado.yaml (encrypted via .sops.yaml).
-# The host decrypts them at activation using its age key at
-# /var/lib/sops-nix/key.txt (provisioned out-of-band, never in the repo).
+# Each host reads ../secrets/<hostname>.yaml (recipients in .sops.yaml): the
+# admin key plus that host's own key, so no host can decrypt another's file.
 #
-{ inputs, ... }:
+# How the host decrypts is per host:
+#   avocado        -> a dedicated age key at /var/lib/sops-nix/key.txt,
+#                     provisioned out-of-band (set in hosts/avocado).
+#   g8way/headless -> sops-nix's default: the age identity derived from the
+#                     SSH host key (/etc/ssh/ssh_host_ed25519_key). Nothing to
+#                     provision — after install, `ssh-keyscan -t ed25519 <ip> |
+#                     ssh-to-age` gives the recipient for .sops.yaml. A
+#                     reinstall regenerates the host key, so re-add + rekey.
+#
+{ inputs, config, ... }:
 {
   imports = [ inputs.sops-nix.nixosModules.sops ];
 
   sops = {
-    defaultSopsFile = ../secrets/avocado.yaml;
+    defaultSopsFile = ../secrets + "/${config.networking.hostName}.yaml";
     defaultSopsFormat = "yaml";
-
-    age = {
-      keyFile = "/var/lib/sops-nix/key.txt";
-      generateKey = false;
-    };
   };
 
   # User password hash. `neededForUsers` decrypts this early enough for
   # user account creation (before normal secrets are mounted).
   sops.secrets."users/rithviknishad/hashed-password".neededForUsers = true;
-
-  # rithviknishad's SSH private key (own binary sops file). Decrypted to
-  # /run/secrets/rithviknishad/ssh_id_ed25519 and referenced by the user's
-  # Home Manager ssh module.
-  sops.secrets."rithviknishad/ssh_id_ed25519" = {
-    sopsFile = ../secrets/ssh_id_ed25519;
-    format = "binary";
-    owner = "rithviknishad";
-    group = "users";
-    mode = "0600";
-  };
+  users.users.rithviknishad.hashedPasswordFile =
+    config.sops.secrets."users/rithviknishad/hashed-password".path;
 }

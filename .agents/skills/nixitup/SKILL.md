@@ -232,6 +232,11 @@ After kexec, confirm the node is still up on the tailnet before disko runs:
   `systemd.targets.{sleep,suspend,hibernate,hybrid-sleep}.enable = false`.
 - **Stripe = total loss** if either disk dies; recommend off-box `zfs send` backups.
 - Use **`/dev/disk/by-id`** everywhere; `/dev/sdX` names are not stable.
+- **kexec can hang the box at handover** from a recent distro kernel (seen with
+  a 7.0 kernel on an Intel NUC5): no network, power cycle required. The disk
+  is untouched if disko hadn't started. Retry with
+  `--kexec-extra-flags "--kexec-syscall"` (uses `kexec_load` instead of
+  `kexec_file_load`).
 - `nixos-anywhere` has **no build `--sudo`** semantics for kexec — it wants root;
   use `--sudo` only for the privilege-escalation path, and prefer a root key.
 - macOS controller: `TMPDIR=/tmp`, and clear stale `known_hosts` entries when a

@@ -4,6 +4,14 @@ NixOS configuration for the host **avocado** (Intel i7-8550U, UEFI, ZFS root),
 installed onto an existing Ubuntu box with
 [`nixos-anywhere`](https://github.com/nix-community/nixos-anywhere).
 
+The flake also defines two k3s agents, **g8way** (Intel NUC jumpbox) and
+**headless** (disposable HP laptop). Both run NixOS with sops and Tailscale,
+and g8way also has its desktop/jumpbox layer (Cinnamon, Home Manager, cluster
+tools + kubeconfig). Since 2026-11-04 both are **joined to k3s** over the
+tailnet, tainted so that nothing schedules there unless it opts in.
+avocado stays the only k3s server and keeps every workload.
+See [`docs/nodes.md`](docs/nodes.md).
+
 ## Layout
 
 ```
@@ -12,11 +20,18 @@ hosts/avocado/
   default.nix                 host entry point (imports modules)
   hardware.nix                boot/kernel/ZFS hostId/microcode
   disko.nix                   ZFS partition + pool/dataset layout
+hosts/g8way/                  Intel NUC5 jumpbox + k3s agent (same 3 files)
+hosts/headless/               HP laptop, disposable k3s agent (same 3 files)
 modules/
   base.nix                    nix settings, gc, packages, firewall
   ssh.nix                     OpenSSH (key-only)
   zfs.nix                     scrub / trim / auto-snapshot
   tailscale.nix               tailscale service
+  k3s.nix                     k3s server (avocado, control plane)
+  k3s-agent.nix               k3s agent, tainted opt-in only (g8way, headless)
+  k3s-common.nix              shared: token, node-ip + flannel over tailscale0
+  desktop-cinnamon.nix        Cinnamon + LightDM, PipeWire, Bluetooth (g8way)
+  jumpbox.nix                 cluster tools + sops-delivered admin kubeconfig (g8way)
   care-box.nix                control plane for the Pi lumine: host key + nightly backup pull
 users/rithviknishad.nix       user + authorized SSH key
 lumine/                       Raspberry Pi lumine (Raspberry Pi OS): CARE in a box at
@@ -79,11 +94,19 @@ them:
 | `just update [input]` | update flake inputs |
 | `just fmt` | format Nix files |
 
-Secrets are stored encrypted in `secrets/avocado.yaml`, keyed by age recipients
+Recipes default to avocado. Target another host with overrides, e.g.
+`just host=g8way addr=g8way.local deploy` (see
+[`docs/deployment.md`](docs/deployment.md#targeting-another-host)).
+
+Secrets are stored encrypted per host in `secrets/<hostname>.yaml`
+(`secrets/avocado.yaml`, `secrets/headless.yaml`, `secrets/g8way.yaml`), keyed by age recipients
 in `.sops.yaml`:
 
 - **admin** key: `~/.config/sops/age/keys.txt` (this Mac) — edit secrets
-- **host** key: `avocado:/var/lib/sops-nix/key.txt` — decrypts at boot
+- **avocado** key: `avocado:/var/lib/sops-nix/key.txt` — decrypts at boot
+- **other hosts**: an age recipient derived from the SSH host key
+  (`ssh-keyscan -t ed25519 <ip> | ssh-to-age`); a reinstall changes it, so
+  update `.sops.yaml` and rekey. See [`docs/secrets.md`](docs/secrets.md).
 
 Edit secrets (inside `nix develop`, so `SOPS_AGE_KEY_FILE` is already set):
 
@@ -97,8 +120,10 @@ Generate a login/sudo password hash to paste in:
 mkpasswd -m sha-512
 ```
 
-Wiring: `users/rithviknishad.nix` reads the hash via
-`config.sops.secrets."users/rithviknishad/hashed-password".path`.
+Wiring: `modules/sops.nix` sets the user's `hashedPasswordFile` from
+`config.sops.secrets."users/rithviknishad/hashed-password".path` (kept out of
+`users/rithviknishad.nix` so hosts without a sops key yet can import the
+user).
 
 ## Day-2 workflow
 

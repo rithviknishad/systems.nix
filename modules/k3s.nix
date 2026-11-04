@@ -1,35 +1,29 @@
 #
-# k3s — single-node Kubernetes (cluster-ready).
+# k3s server — the control plane (avocado).
 #
-# Runs avocado as a k3s *server* with embedded etcd (clusterInit), so more
-# servers/agents can join later for HA. Joining nodes use the shared token in
-# secrets/avocado.yaml under k3s/token (any long random string; generate with
-# `openssl rand -hex 32`). Bundled add-ons (Traefik ingress, local-path
-# storage, ServiceLB) are left on for an easy first workload.
+# Runs as a k3s *server* with embedded etcd (clusterInit) and is the only
+# server: g8way and headless join as agents (modules/k3s-agent.nix). Shared
+# settings (token, tailnet node-ip, flannel over tailscale0) live in
+# ./k3s-common.nix. Bundled add-ons (Traefik ingress, local-path storage,
+# ServiceLB) are left on.
 #
 # Remote access (kubectl/Lens from the Mac): the API cert is issued for the
 # tailnet name via tls-san, so copy /etc/rancher/k3s/k3s.yaml off the box and
 # point its server URL at https://avocado:6443.
 #
+{ pkgs, ... }:
 {
-  pkgs,
-  config,
-  ...
-}:
-{
+  imports = [ ./k3s-common.nix ];
+
   services.k3s = {
-    enable = true;
     role = "server";
     clusterInit = true;
-    tokenFile = config.sops.secrets."k3s/token".path;
     extraFlags = [
       "--tls-san=avocado"
       "--tls-san=avocado.local"
       "--write-kubeconfig-mode=0640"
     ];
   };
-
-  sops.secrets."k3s/token" = { };
 
   # Cluster tooling on the box.
   environment.systemPackages = with pkgs; [
@@ -38,9 +32,10 @@
     k9s
   ];
 
-  # k3s API + node ports. tailscale0 is already a trusted interface, so this
-  # is mainly for LAN/other-node access. etcd ports (2379/2380) only matter
-  # once you add more servers.
+  # k3s API + node ports. tailscale0 is already a trusted interface (and all
+  # cluster traffic now rides it, see ./k3s-common.nix), so this is mainly
+  # for LAN kubectl access. etcd ports (2379/2380) only matter once you add
+  # more servers.
   networking.firewall.allowedTCPPorts = [
     6443 # kube API
     2379 # etcd client

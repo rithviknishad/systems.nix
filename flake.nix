@@ -1,5 +1,5 @@
 {
-  description = "NixOS configuration for avocado (ZFS, disko, deployed via nixos-anywhere)";
+  description = "NixOS configurations for avocado, g8way and headless (ZFS, disko, deployed via nixos-anywhere)";
 
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
@@ -59,6 +59,26 @@
         modules = [
           disko.nixosModules.disko
           ./hosts/avocado
+        ];
+      };
+
+      # k3s agents (workers) joining avocado's control plane. g8way doubles as
+      # the Cinnamon jumpbox; headless is a disposable laptop worker.
+      nixosConfigurations.g8way = nixpkgs.lib.nixosSystem {
+        system = "x86_64-linux";
+        specialArgs = { inherit inputs; };
+        modules = [
+          disko.nixosModules.disko
+          ./hosts/g8way
+        ];
+      };
+
+      nixosConfigurations.headless = nixpkgs.lib.nixosSystem {
+        system = "x86_64-linux";
+        specialArgs = { inherit inputs; };
+        modules = [
+          disko.nixosModules.disko
+          ./hosts/headless
         ];
       };
 

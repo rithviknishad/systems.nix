@@ -1,7 +1,7 @@
 #
 # User: rithviknishad
 #
-{ config, pkgs, ... }:
+{ pkgs, ... }:
 {
   users.mutableUsers = false;
 
@@ -18,9 +18,10 @@
       "dialout"
     ];
     shell = pkgs.zsh;
-    # Password hash comes from sops (secrets/avocado.yaml). Enables console
-    # login + sudo. Edit it with: sops secrets/avocado.yaml
-    hashedPasswordFile = config.sops.secrets."users/rithviknishad/hashed-password".path;
+    # The password hash (console/GUI login + sudo) is wired in modules/sops.nix,
+    # next to the secret it comes from — so a host can import this user before
+    # it has a sops key (a fresh nixos-anywhere install). Until then the
+    # account is SSH-key only and root's key (below) does the admin work.
     openssh.authorizedKeys.keys = [
       "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPaqSwO7pnIjLIbiR2ApU8s73EI8Sya/Kd0orKci8dSh"
       # tellmeY18 (github.com/tellmeY18.keys)

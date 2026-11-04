@@ -5,6 +5,18 @@
 {
   imports = [ inputs.home-manager.nixosModules.home-manager ];
 
+  # rithviknishad's SSH private key (own binary sops file), used by the Home
+  # Manager ssh module (home/rithviknishad/apps/ssh) as its identityFile.
+  # Declared here, next to its only consumer, so a host only needs this key
+  # in .sops.yaml (secrets/ssh_id_ed25519) once it runs Home Manager.
+  sops.secrets."rithviknishad/ssh_id_ed25519" = {
+    sopsFile = ../secrets/ssh_id_ed25519;
+    format = "binary";
+    owner = "rithviknishad";
+    group = "users";
+    mode = "0600";
+  };
+
   home-manager = {
     useGlobalPkgs = true;
     useUserPackages = true;

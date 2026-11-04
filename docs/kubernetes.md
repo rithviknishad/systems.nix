@@ -6,15 +6,23 @@ nav_order: 8
 
 # Kubernetes (k3s)
 
-`avocado` runs a single-node [k3s](https://k3s.io) cluster
-(`modules/k3s.nix`). Workloads live under `k8s/`.
+`avocado` runs the [k3s](https://k3s.io) control plane (`modules/k3s.nix`)
+and every workload. g8way and headless join as tainted **agents**
+(`modules/k3s-agent.nix`) over the tailnet; see
+[Cluster nodes](nodes.md) for how scheduling works across them. Workloads
+live under `k8s/`.
 
 ## The cluster
 
-- **Role:** `server` with `clusterInit = true` → embedded **etcd**, so more
-  servers/agents can join later for HA (today it's one node).
+- **Role:** avocado is the only `server`, with `clusterInit = true`, so it
+  runs embedded **etcd**. Agents carry the taint
+  `rithviknishad.dev/opt-in=true:NoSchedule`; a workload runs there only
+  with a matching toleration.
+- **Networking:** every node's `node-ip` is its Tailscale IPv4 and flannel
+  runs over `tailscale0` (`modules/k3s-common.nix`), so node addresses don't
+  depend on LAN DHCP.
 - **Token:** from sops (`k3s/token`) — any long random string; joining nodes
-  reuse it.
+  reuse it (each host has a copy in its own `secrets/<host>.yaml`).
 - **API cert:** issued for the tailnet name via `--tls-san=avocado` (and
   `avocado.local`), so remote `kubectl`/Lens over Tailscale trust it.
 - **Kubeconfig mode:** `0640`.

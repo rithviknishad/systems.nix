@@ -21,7 +21,7 @@ environment, the Kubernetes workloads, and the monitoring stack.
 [nixos-anywhere](https://github.com/nix-community/nixos-anywhere). Its screen
 is a **kiosk** — cage runs btop fullscreen at boot, always showing live system
 stats — while a per-user **Home Manager** profile configures the CLI
-environment. It also runs a single-node **k3s** cluster hosting real workloads
+environment. It also runs the **k3s** control plane hosting real workloads
 (Immich photos) behind the bundled **Traefik** ingress. The box is reachable
 privately over **Tailscale** and publicly through a **Cloudflare Tunnel** (no
 open ports). A **VictoriaMetrics + Grafana + ntfy** stack watches the host,
@@ -33,6 +33,7 @@ with **sops-nix**.
 | Page | What it covers |
 |---|---|
 | [Architecture](architecture.md) | End-to-end picture, request flow, and diagrams |
+| [Cluster nodes](nodes.md) | avocado (server) + the g8way/headless k3s agents, rollout history |
 | [NixOS & modules](nix-modules.md) | The flake, every `modules/*.nix`, host and user config |
 | [Home Manager](home-manager.md) | The desktop and per-app user environment |
 | [Storage: disko & ZFS](storage.md) | Disk partitioning, the `rpool` stripe, snapshots |

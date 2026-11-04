@@ -19,11 +19,15 @@ each module opens only the ports it needs:
 |---|---|---|
 | 22/tcp | `ssh.nix` (`openFirewall`) | SSH (key-only) |
 | 5201/tcp + 5201/udp | `iperf.nix` | iperf3 server (LAN + tailnet throughput tests) |
-| 5353/udp | `avahi.nix` (`openFirewall`) | mDNS — publishing `avocado.local` |
+| 5353/udp | `avahi.nix` (`openFirewall`) | mDNS — publishing `<hostname>.local` |
 | 6443/tcp | `k3s.nix` | Kubernetes API |
 | 2379, 2380/tcp | `k3s.nix` | etcd client / peer (only matters with >1 server) |
 | 10250/tcp | `k3s.nix` | kubelet |
 | 8472/udp | `k3s.nix` | flannel VXLAN |
+
+The k3s ports are opened on avocado only. Node-to-node cluster traffic (node
+IPs, flannel VXLAN) runs over `tailscale0`, a trusted interface, so the
+agents (g8way, headless) open nothing for k3s.
 
 Tailscale adds `tailscale0` as a **trusted interface** and sets reverse-path
 filtering to `loose`, so tailnet traffic bypasses these rules.
@@ -55,6 +59,25 @@ ssh rithviknishad@avocado.local
 > or `/etc/hosts` (see [below](#reaching-internal-services-over-tailscale)).
 > Multicast also does not cross Tailscale, so `.local` works on the LAN only;
 > from the tailnet use `avocado`.
+
+{: .note }
+> **Known issue: avocado currently registers as `avocado-2.local`.** Something
+> else on the LAN already claims `avocado.local`, so Avahi's conflict handling
+> renamed the box. Until that's tracked down (not yet investigated), `avocado.local`
+> may reach the other device. Use `avocado-2.local` or the tailnet name.
+
+### Other hosts
+
+The same module runs on every host, each publishing on its own LAN NIC (set in
+`hosts/<host>/default.nix`). The [new nodes](nodes.md) answer to:
+
+| Name | Host | NIC | Status |
+|---|---|---|---|
+| `g8way.local` | NUC jumpbox / k3s agent | `enp0s25` | published since the NixOS install (was Mint `nuc.local`) |
+| `headless.local` | disposable laptop k3s agent | `enp1s0` | published since the NixOS install (was Mint `minty.local`) |
+
+The LAN has no DHCP reservations. If a name stops resolving, find the host by
+its MAC (see [Cluster nodes](nodes.md#finding-a-host-on-the-lan)).
 
 ## Tailscale (private mesh)
 

@@ -1,10 +1,11 @@
 #
 # Tailscale, fully declarative.
 #
-# Auto-authenticates from a sops-managed auth key. Put a real key in
-# secrets/avocado.yaml under tailscale/auth-key (a reusable/ephemeral key
-# from https://login.tailscale.com/admin/settings/keys). Until then the
-# autoconnect unit just fails harmlessly.
+# Auto-authenticates from a sops-managed auth key: `tailscale/auth-key` in the
+# host's secrets/<hostname>.yaml (a reusable key from
+# https://login.tailscale.com/admin/settings/keys — prefer a *tagged* one, so
+# the node's key never expires and it can't silently drop off the tailnet).
+# Without a valid key the autoconnect unit just fails harmlessly.
 #
 { config, ... }:
 {

@@ -1,4 +1,7 @@
-# Common commands for the avocado NixOS config.
+# Common commands for the NixOS hosts in this flake (avocado by default).
+# Target another host by overriding `host`/`addr`, e.g.
+#   just host=g8way addr=g8way.local deploy
+# (see docs/deployment.md "Targeting another host").
 # Run inside the dev shell (`nix develop` / direnv), where all tools live.
 # List recipes with `just` or `just --list`.
 

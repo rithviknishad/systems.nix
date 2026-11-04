@@ -1,12 +1,17 @@
-# sops policy: every secret is encrypted to BOTH the admin (this Mac) and the
-# avocado host, so you can edit and the box can decrypt at boot.
+# sops policy: every secret is encrypted to the admin (this Mac) plus the host(s)
+# that need it, so you can edit and the box can decrypt at boot.
 #
 # Recipients:
-#   admin   -> ~/.config/sops/age/keys.txt  (edit secrets from your Mac)
-#   avocado -> /var/lib/sops-nix/key.txt     (host decrypts at activation)
+#   admin    -> ~/.config/sops/age/keys.txt  (edit secrets from your Mac)
+#   avocado  -> /var/lib/sops-nix/key.txt     (host decrypts at activation)
+#   headless -> derived from its SSH host key (ssh-keyscan -t ed25519 <ip> |
+#               ssh-to-age); a reinstall changes it -> update + rekey.
+#   g8way    -> same mechanism as headless.
 keys:
   - &admin age1lfwpymp7pwv0tcgyrvmtamz6stzcrkazvvmvmpkknfl59h88d5uq7p5j0k
   - &avocado age1yhw9dwuqnjxlcuntvmd2ce2fnaenkfym2zvkj2caq4h6rscwys9qh0na3k
+  - &headless age1c7p5g050d4k6xne7e57y8tuzsf4xrpwgstdxv9ws954a6v4cyqxq7c7pja
+  - &g8way age180mjswuzvh7e92tajuz5m2v47zynyf2ajc6z9ejruhtt2lvzwpwq73nrs7
 
 creation_rules:
   - path_regex: secrets/avocado\.yaml$
@@ -14,11 +19,28 @@ creation_rules:
       - age:
           - *admin
           - *avocado
+  # headless's own file (password hash, tailscale auth key, k3s join token) —
+  # deliberately NOT avocado.yaml, so the worker can't read avocado's secrets.
+  - path_regex: secrets/headless\.yaml$
+    key_groups:
+      - age:
+          - *admin
+          - *headless
+  # g8way's own file (same three secrets as headless's), same reasoning.
+  - path_regex: secrets/g8way\.yaml$
+    key_groups:
+      - age:
+          - *admin
+          - *g8way
+  # rithviknishad's personal SSH key, for every host that runs Home Manager
+  # (modules/home-manager.nix). g8way is the jumpbox, so it gets it too —
+  # a deliberate tradeoff: the key is now on two machines' disks.
   - path_regex: secrets/ssh_id_ed25519$
     key_groups:
       - age:
           - *admin
           - *avocado
+          - *g8way
 
   - path_regex: secrets/cloudflared_credentials\.json$
     key_groups:
