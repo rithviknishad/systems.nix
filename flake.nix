@@ -4,6 +4,15 @@
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
 
+    # Security bridge for Tailscale ONLY (modules/tailscale.nix): the admin
+    # console flagged < 1.104.5 as vulnerable, nixos-unstable still had 1.104.4,
+    # and 1.104.5 needs Go 1.27, which our nixpkgs lacks (so a plain src
+    # override can't work). Pinned to an exact master rev whose tailscale is
+    # already on cache.nixos.org. modules/tailscale.nix picks whichever of the
+    # two is newer, so once `just update nixpkgs` catches up this is dead
+    # weight: delete it then (and its docs in docs/networking.md).
+    nixpkgs-tailscale.url = "github:nixos/nixpkgs/009ded828c9c04e0b999850022ef8a2f9dff4ba1";
+
     disko = {
       url = "github:nix-community/disko";
       inputs.nixpkgs.follows = "nixpkgs";

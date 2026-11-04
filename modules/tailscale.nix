@@ -7,10 +7,25 @@
 # the node's key never expires and it can't silently drop off the tailnet).
 # Without a valid key the autoconnect unit just fails harmlessly.
 #
-{ config, ... }:
+# Package: the newer of our nixpkgs' tailscale and the one from the
+# `nixpkgs-tailscale` flake input (a security bridge, see flake.nix). The
+# version check makes the bridge a no-op as soon as the main pin catches up.
+#
+{
+  config,
+  lib,
+  pkgs,
+  inputs,
+  ...
+}:
+let
+  bridged = inputs.nixpkgs-tailscale.legacyPackages.${pkgs.stdenv.hostPlatform.system}.tailscale;
+in
 {
   services.tailscale = {
     enable = true;
+    package =
+      if lib.versionAtLeast pkgs.tailscale.version bridged.version then pkgs.tailscale else bridged;
     useRoutingFeatures = "both";
     authKeyFile = config.sops.secrets."tailscale/auth-key".path;
   };

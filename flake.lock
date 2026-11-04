@@ -181,6 +181,22 @@
         "type": "github"
       }
     },
+    "nixpkgs-tailscale": {
+      "locked": {
+        "lastModified": 1793787939,
+        "narHash": "sha256-PjGkIFq3uAzmL2fVQTwE3r4Z7FuPbA30jMm+gFtV+4s=",
+        "owner": "nixos",
+        "repo": "nixpkgs",
+        "rev": "009ded828c9c04e0b999850022ef8a2f9dff4ba1",
+        "type": "github"
+      },
+      "original": {
+        "owner": "nixos",
+        "repo": "nixpkgs",
+        "rev": "009ded828c9c04e0b999850022ef8a2f9dff4ba1",
+        "type": "github"
+      }
+    },
     "root": {
       "inputs": {
         "disko": "disko",
@@ -188,6 +204,7 @@
         "kite-mcp-server": "kite-mcp-server",
         "nixos-anywhere": "nixos-anywhere",
         "nixpkgs": "nixpkgs",
+        "nixpkgs-tailscale": "nixpkgs-tailscale",
         "sops-nix": "sops-nix"
       }
     },

@@ -20,9 +20,12 @@ entry point, and every module under `modules/`.
 | `sops-nix` | encrypted secrets, decrypted at activation |
 | `home-manager` | per-user environment, as a NixOS module |
 | `nixos-anywhere` | remote bare-metal installer (used via `nix run`) |
+| `nixpkgs-tailscale` | a pinned nixpkgs `master` commit, used **only** for the Tailscale package (security bridge, see [`tailscale.nix`](#tailscalenix--private-mesh-networking)) |
 
 Every secondary input `follows` `nixpkgs`, so the whole tree resolves against a
-single nixpkgs revision (fewer duplicate dependencies, faster evaluation).
+single nixpkgs revision (fewer duplicate dependencies, faster evaluation). The
+one deliberate exception is `nixpkgs-tailscale`, a second nixpkgs that's
+evaluated only for the `tailscale` attribute.
 
 ### Outputs
 
@@ -274,8 +277,10 @@ Declarative Tailscale: auto-authenticates from `tailscale/auth-key` in the
 host's `secrets/<hostname>.yaml`. Prefer a **tagged, reusable** key, so the
 node key never expires; without a valid key the autoconnect unit fails
 harmlessly. Also sets `useRoutingFeatures = "both"`, trusts the `tailscale0` interface in the
-firewall, and sets reverse-path filtering to `loose`. See
-[Networking](networking.md).
+firewall, and sets reverse-path filtering to `loose`. The package is the
+newer of nixpkgs' and the `nixpkgs-tailscale` input's (a security bridge to
+1.104.5 that turns itself off once nixpkgs catches up). See
+[Networking](networking.md#tailscale-private-mesh).
 
 ### `k3s.nix` / `k3s-agent.nix` / `k3s-common.nix` — Kubernetes
 

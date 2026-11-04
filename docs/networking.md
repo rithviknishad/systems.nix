@@ -88,6 +88,18 @@ its MAC (see [Cluster nodes](nodes.md#finding-a-host-on-the-lan)).
   just fails harmlessly.
 - `useRoutingFeatures = "both"` (can advertise and accept routes).
 - Trusts `tailscale0` in the firewall; `checkReversePath = "loose"`.
+- **Version bridge.** The package is the newer of our nixpkgs' `tailscale`
+  and the one from the `nixpkgs-tailscale` flake input, a nixpkgs `master`
+  commit pinned only for this. It was added on 2026-11-04 because the admin
+  console flagged versions below **1.104.5** as vulnerable. nixos-unstable
+  only had 1.104.4, and 1.104.5 needs Go 1.27, which our nixpkgs pin lacks,
+  so a simple `src` override wasn't possible. The master build comes straight
+  from cache.nixos.org. Once `just update nixpkgs` brings a tailscale that's
+  at least as new, the version check picks it automatically. Then remove the
+  input (`flake.nix`, `modules/tailscale.nix`) and this bullet. For a future
+  advisory, bump the bridge with `just update nixpkgs-tailscale` after
+  changing its pinned rev, then check that the build is cached. Check what's
+  running with `tailscale version` on each host.
 
 The box is reachable at the MagicDNS name **`avocado`**, which is what the
 `justfile` and the k3s `--tls-san` use — stable across DHCP/IP changes. This is
