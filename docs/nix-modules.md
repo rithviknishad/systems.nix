@@ -301,7 +301,9 @@ newer of nixpkgs' and the `nixpkgs-tailscale` input's (a security bridge to
   `node-ip` to `/run/k3s/node-ip.yaml` (`--config`). It's written at
   start-up rather than hardcoded so a reinstall's new Tailscale IP just works,
   and IPv4 only because interface auto-detection would also pick up
-  `tailscale0`'s IPv6.
+  `tailscale0`'s IPv6. k3s is also `PartOf=tailscaled.service`, so it
+  restarts with tailscaled and flannel recreates its VXLAN device (see
+  [Cluster nodes](nodes.md#phase-3-join-k3s-over-the-tailnet)).
 
 Details on the [Kubernetes](kubernetes.md) and [Cluster nodes](nodes.md#phase-3-join-k3s-over-the-tailnet)
 pages.

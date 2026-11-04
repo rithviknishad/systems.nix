@@ -60,6 +60,17 @@ in
   systemd.services.k3s = {
     after = [ "tailscaled.service" ];
     wants = [ "tailscaled.service" ];
+    # Restart k3s whenever tailscaled is stopped/restarted (e.g. by a switch
+    # that upgrades tailscale). flannel's VXLAN device (flannel.1) is created
+    # *on* tailscale0, and the kernel deletes it when tailscale0 goes away;
+    # flannel only recreates it at k3s start. Without this, a tailscale
+    # upgrade on 2026-11-04 silently broke all cross-node pod traffic on
+    # every node while host-network checks stayed green. Cheap: KillMode is
+    # `process`, so pods keep running across a k3s restart (on avocado the
+    # API server blips for ~30s). PartOf covers explicit stops/restarts; for
+    # anything else that recreates tailscale0 (a crash, a manual `ip link`),
+    # TargetDown on the agents' Vector pods (scraped over pod IPs) catches it.
+    partOf = [ "tailscaled.service" ];
     serviceConfig.ExecStartPre = [ writeNodeIp ];
   };
 }

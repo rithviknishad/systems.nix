@@ -194,6 +194,11 @@ avocado) and `modules/k3s-agent.nix` (g8way, headless):
   with an address before it starts. If avocado boots with no internet and
   `tailscale0` never gets its IP, k3s keeps retrying instead of starting on
   the LAN.
+- **k3s restarts with tailscaled** (`PartOf=tailscaled.service`). flannel's
+  VXLAN device `flannel.1` is created *on* `tailscale0`, and the kernel
+  deletes it when `tailscale0` goes away; flannel only recreates it when k3s
+  starts. Restarting k3s doesn't touch running pods (`KillMode=process`); on
+  avocado the API is briefly unavailable.
 - **Agents join `https://avocado:6443`** (MagicDNS; the API cert already
   carries `--tls-san=avocado`) with the shared `k3s/token` from their own
   `secrets/<host>.yaml`.
@@ -224,6 +229,17 @@ on avocado (so the VXLAN-over-Tailscale MTU is fine).
 > `server/tls`, and exits), then `systemctl start k3s`. Do the same if
 > avocado's tailnet IP ever changes, e.g. after re-registering it with
 > Tailscale. Take an etcd snapshot first.
+
+{: .warning }
+> **A tailscaled restart used to silently break cross-node pod traffic.**
+> The Tailscale 1.104.5 rollout (2026-11-04) restarted tailscaled on every
+> node *after* k3s was up, which deleted `flannel.1` everywhere. Nodes stayed
+> `Ready` and every host-network check (node-exporter, Gatus) stayed green,
+> because only pod-to-pod traffic between nodes broke; it surfaced when the
+> agents' Vector pods couldn't reach cluster DNS. Fixed by the `PartOf`
+> above. Symptom check: `ip link show flannel.1` (missing = broken; restart
+> k3s). `TargetDown` on the agents' Vector pods, which vmagent scrapes over
+> pod IPs, now alerts on it.
 
 ### Phase 4: monitoring
 
