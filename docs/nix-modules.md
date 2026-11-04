@@ -79,7 +79,9 @@ g8way also imports [`desktop-cinnamon`](#desktop-cinnamonnix--cinnamon-desktop),
 [`nh`](#nhnix--the-nix-helper-workflow), and its `hardware.nix` sets up Intel
 VA-API (iHD) for the HD 5500. Both also import
 [`k3s-agent`](#k3snix--k3s-agentnix--k3s-commonnix--kubernetes) and joined
-the cluster on 2026-11-04. See [Cluster nodes](nodes.md).
+the cluster on 2026-11-04, plus
+[`monitoring`](#monitoringnix--host-side-metrics-glue) for host ZFS/SMART
+metrics. See [Cluster nodes](nodes.md).
 
 avocado's `default.nix` also sets `sops.age.keyFile` (its dedicated age key,
 see [`sops.nix`](#sopsnix--secrets-wiring)); the other hosts don't need to.
@@ -347,13 +349,26 @@ mounts read-only:
 | Timer | Cadence | Emits | Feeds |
 |---|---|---|---|
 | `zfs-textfile-metrics` | every 1 min | `node_zfs_zpool_state` | ZFS pool-health alerts |
-| `smart-textfile-metrics` | every 5 min | `smartmon_*` (health, temp, power-on hours) | SMART disk alerts |
+| `smart-textfile-metrics` | every 5 min | `smartmon_*` (health, temp, power-on hours, NVMe health log) | SMART disk alerts |
 
 Both scripts write to a temp file, `chmod 0644` (node-exporter runs unprivileged
 and needs world-readable files), then **atomically `mv`** into place so the
 collector never reads a partial file. The SMART script probes several
 `smartctl -d` access types to handle SATA drives behind the AHCI controller.
 This is the host half of the [Monitoring](monitoring.md) stack.
+
+Every k3s node imports it (avocado, g8way, headless), since node-exporter runs
+on all of them. It is the repo's only module with its own option:
+
+```nix
+# A disk whose FAILED verdict is known and accepted, by serial number.
+systems.monitoring.smart.acknowledgedFailingSerials = [ "S29NNXAH395193" ];
+```
+
+Listed disks get `acknowledged="true"` on `smartmon_device_smart_healthy`,
+which `SmartDeviceUnhealthy` skips; the `SmartNvme*` alerts still watch them
+(see [Monitoring](monitoring.md#smart-smart-vmrulesyaml)). headless uses it for
+its worn-out NVMe.
 
 ## The system user (`users/rithviknishad.nix`)
 

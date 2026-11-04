@@ -10,14 +10,15 @@ An in-cluster observability stack watches the host, the disks, and the cluster.
 It's built on **VictoriaMetrics** (a Prometheus-compatible TSDB), **Grafana**,
 **VictoriaLogs + Vector** for logs, **Gatus** for uptime, and **ntfy.sh** for
 push notifications. It lives in `k8s/monitoring/` and mirrors
-[`tellmeY18/retire.nix`](https://github.com/tellmeY18/retire.nix), trimmed to
-this single-node box.
+[`tellmeY18/retire.nix`](https://github.com/tellmeY18/retire.nix), adapted
+to this cluster: avocado runs the whole stack, and the k3s agents
+([g8way, headless](nodes.md)) are watched through their node-exporter.
 
 ## Big picture
 
 ```mermaid
 flowchart TB
-    subgraph host[Host - NixOS]
+    subgraph host[Each node - NixOS: avocado, g8way, headless]
         ne[node-exporter]
         tf[textfile metrics: ZFS + SMART timers]
         tf --> ne
@@ -164,14 +165,28 @@ single run slip for a reboot while still catching two consecutive misses.
 
 ### SMART (`smart-vmrules.yaml`)
 
-Reads `smartmon_*` from the host SMART timer.
+Reads `smartmon_*` from the host SMART timer, on every node.
 
 | Alert | Severity | Fires when |
 |---|---|---|
-| `SmartDeviceUnhealthy` | critical | SMART self-assessment FAILED — back up now |
+| `SmartDeviceUnhealthy` | critical | SMART self-assessment FAILED on a disk that isn't acknowledged — back up now |
 | `SmartDeviceHealthUnknown` | warning | couldn't read a SMART assessment for 15m |
 | `SmartTextfileStale` | warning | metrics not refreshed in >30m (timer broken) |
 | `SmartDriveHot` | warning | drive > 60 °C for 10m |
+| `SmartNvmeCriticalWarning` | critical | an NVMe sets the spare-below-threshold, read-only or backup-failed warning bit (5m) |
+| `SmartNvmeMediaErrorsIncreasing` | warning | an NVMe logged new media/data-integrity errors in the last hour |
+
+**Acknowledged disks.** headless's NVMe fails SMART *permanently* (worn past
+its rated endurance; see [Cluster nodes](nodes.md)), and we've chosen to run
+it into the ground. A permanent page would train you to ignore the topic, so
+its serial is listed in `systems.monitoring.smart.acknowledgedFailingSerials`
+([`monitoring.nix`](nix-modules.md#monitoringnix--host-side-metrics-glue)),
+which labels it `acknowledged="true"` and makes `SmartDeviceUnhealthy` skip
+it. The `SmartNvme*` rules apply to acknowledged disks too: an NVMe's overall
+verdict is just "any critical-warning bit set", so the per-bit
+`smartmon_nvme_critical_warning{flag=...}` and `smartmon_nvme_media_errors`
+series are what tell "worn but stable" from "about to die". Those are the cue
+to drain the node.
 
 ### PVC storage (`pvc-storage-vmrules.yaml`)
 

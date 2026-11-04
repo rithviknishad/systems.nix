@@ -6,6 +6,12 @@
 #
 # avocado's rpool is a no-redundancy stripe, so a single failing disk means
 # data loss — SmartDeviceUnhealthy is a page-worthy, back-up-now signal.
+#
+# Disks whose failure is known and accepted (headless's worn-out NVMe) carry
+# acknowledged="true" (set per host via
+# systems.monitoring.smart.acknowledgedFailingSerials). SmartDeviceUnhealthy
+# skips them, since a permanent page trains you to ignore the topic. The
+# SmartNvme* rules below don't, so a disk that gets *worse* still pages.
 apiVersion: operator.victoriametrics.com/v1beta1
 kind: VMRule
 metadata:
@@ -22,7 +28,7 @@ spec:
       rules:
         - alert: SmartDeviceUnhealthy
           expr: |-
-            smartmon_device_smart_healthy == 0
+            smartmon_device_smart_healthy{acknowledged!="true"} == 0
           for: 1m
           labels:
             severity: critical
@@ -71,3 +77,34 @@ spec:
             description: >-
               {{ $labels.disk }} on {{ $labels.instance }} is at
               {{ $value }}°C (>60°C for 10m). Check airflow.
+
+        # NVMe health-log signals. These fire for every NVMe disk, acknowledged
+        # or not. Temperature (bit 1) is covered by SmartDriveHot, and
+        # reliability_degraded (bit 2) is the wear-out flag that
+        # SmartDeviceUnhealthy already reports for unacknowledged disks.
+        - alert: SmartNvmeCriticalWarning
+          expr: |-
+            smartmon_nvme_critical_warning{flag=~"available_spare|read_only|volatile_memory_backup"} == 1
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "NVMe {{ $labels.disk }} raised critical warning: {{ $labels.flag }}"
+            description: >-
+              {{ $labels.disk }} on {{ $labels.instance }} set the
+              `{{ $labels.flag }}` critical-warning bit (spare below threshold,
+              media forced read-only, or backup capacitor failed). The disk is
+              close to dying — drain the node (`kubectl drain`) and replace it.
+
+        - alert: SmartNvmeMediaErrorsIncreasing
+          expr: |-
+            delta(smartmon_nvme_media_errors[1h]) > 0
+          labels:
+            severity: warning
+          annotations:
+            summary: "NVMe {{ $labels.disk }} is logging new media errors"
+            description: >-
+              {{ $labels.disk }} on {{ $labels.instance }} logged
+              {{ $value }} new media/data-integrity errors in the last hour
+              (unrecovered reads or writes). Run `zpool status -v` to see if
+              ZFS caught corrupted blocks.

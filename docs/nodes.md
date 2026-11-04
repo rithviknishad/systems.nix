@@ -108,7 +108,8 @@ attached monitor, plus the CLI tools over SSH.
   (NVM subsystem reliability degraded), ~33k power-on hours. Spare is still
   100% with 0 media errors, so it isn't dying right now, but it can go at any
   time. The node is therefore **disposable**. When the disk dies, swap it and
-  reinstall. There is nothing to restore.
+  reinstall. There is nothing to restore. Monitoring acknowledges the failure
+  and alerts only if it gets worse (see [Phase 4](#phase-4-monitoring)).
 - It's a laptop running as a server. Its config ignores the lid switch in
   every power state and disables the `sleep`/`suspend`/`hibernate`/
   `hybrid-sleep` targets. Otherwise logind would suspend it on lid close,
@@ -226,10 +227,23 @@ on avocado (so the VXLAN-over-Tailscale MTU is fine).
 
 ### Phase 4: monitoring
 
-Gatus probes and alerts for g8way and headless (`k8s/monitoring/`). Before
-wiring host SMART metrics for headless, decide how to handle its disk.
-It fails SMART **permanently**, so a plain SMART-health alert would page
-forever.
+Monitoring for g8way and headless (`k8s/monitoring/`, `modules/monitoring.nix`):
+
+- **Host metrics.** Both import `modules/monitoring.nix`, so their ZFS pool
+  health, snapshot coverage and SMART reach VictoriaMetrics through their
+  node-exporter like avocado's do. Their `/home` and `/var` are tagged
+  `auto-snapshot=true`, so `ZFSSnapshotsMissing`/`Stale` cover them too.
+- **headless's disk.** It fails SMART **permanently**, so a plain
+  SMART-health alert would page forever. Its serial is acknowledged
+  (`systems.monitoring.smart.acknowledgedFailingSerials` in
+  `hosts/headless/default.nix`), which `SmartDeviceUnhealthy` skips, while the
+  NVMe health-log alerts (`SmartNvmeCriticalWarning`,
+  `SmartNvmeMediaErrorsIncreasing`) still page if it gets worse. See
+  [Monitoring](monitoring.md#smart-smart-vmrulesyaml).
+- **Node down.** No new rules needed: the chart's defaults already cover the
+  agents (`KubeNodeNotReady`, `KubeNodeUnreachable`, `KubeletDown`, and
+  `TargetDown` for their node-exporter), as do the node-exporter rules
+  (`NodeSystemdServiceFailed`, filesystem space, ...).
 
 ```mermaid
 flowchart TB

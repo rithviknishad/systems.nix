@@ -10,12 +10,17 @@
 #
 # These make the ZFSPool* and Smartmon* alerts fire — critical for avocado's
 # no-redundancy rpool stripe, where a single failing disk destroys the pool.
+# Imported by every k3s node (avocado, g8way, headless): node-exporter runs on
+# all of them, and each is a single point of failure on its own disk(s).
 #
 {
+  config,
+  lib,
   pkgs,
   ...
 }:
 let
+  cfg = config.systems.monitoring;
   textfileDir = "/var/lib/node-exporter/textfile";
 
   # node-exporter runs as a non-root user in-cluster, so the .prom files must
@@ -97,13 +102,15 @@ let
   '';
 
   # SMART disk health via smartctl JSON. Emits the smartmon_* family (a subset
-  # of the well-known node-exporter smartmon.sh script) for every scanned disk.
+  # of the well-known node-exporter smartmon.sh script) for every scanned disk,
+  # plus NVMe wear/health-log gauges (smartmon_nvme_*).
   smartTextfileScript = pkgs.writeShellScript "smart-textfile-metrics" ''
     set -euo pipefail
 
     dir=${textfileDir}
     smartctl=${pkgs.smartmontools}/bin/smartctl
     jq=${pkgs.jq}/bin/jq
+    acked=${lib.escapeShellArg (lib.concatStringsSep " " cfg.smart.acknowledgedFailingSerials)}
 
     tmp="$(${pkgs.coreutils}/bin/mktemp "$dir/.smartmon.prom.XXXXXX")"
     trap 'rm -f "$tmp"' EXIT
@@ -115,7 +122,11 @@ let
     f_temp="$(${pkgs.coreutils}/bin/mktemp)"
     f_poh="$(${pkgs.coreutils}/bin/mktemp)"
     f_run="$(${pkgs.coreutils}/bin/mktemp)"
-    trap 'rm -f "$tmp" "$f_health" "$f_temp" "$f_poh" "$f_run"' EXIT
+    f_cw="$(${pkgs.coreutils}/bin/mktemp)"
+    f_media="$(${pkgs.coreutils}/bin/mktemp)"
+    f_used="$(${pkgs.coreutils}/bin/mktemp)"
+    f_spare="$(${pkgs.coreutils}/bin/mktemp)"
+    trap 'rm -f "$tmp" "$f_health" "$f_temp" "$f_poh" "$f_run" "$f_cw" "$f_media" "$f_used" "$f_spare"' EXIT
 
     # `smartctl --scan -j` lists devices with their access type (sat/nvme/...).
     $smartctl --scan -j 2>/dev/null \
@@ -131,7 +142,10 @@ let
           for t in sat "$devtype" auto nvme; do
             probe="$($smartctl -H -A -i -j -d "$t" "$devname" 2>/dev/null || true)"
             [ -n "$probe" ] || continue
-            passed="$(echo "$probe" | $jq -r '.smart_status.passed // empty')"
+            # Not `.smart_status.passed // empty`: jq's `//` treats false as
+            # missing, so a FAILED disk would never win and the first
+            # (wrong-type, status-less) probe got reported as -1 / unknown.
+            passed="$(echo "$probe" | $jq -r 'if .smart_status.passed == null then empty else .smart_status.passed end')"
             if [ -n "$passed" ]; then info="$probe"; usedtype="$t"; break; fi
             [ -z "$info" ] && info="$probe" && usedtype="$t"
           done
@@ -144,11 +158,36 @@ let
           temp="$(echo "$info" | $jq -r '.temperature.current // empty')"
           poh="$(echo "$info" | $jq -r '.power_on_time.hours // empty')"
 
-          printf 'smartmon_device_smart_healthy{disk="%s",type="%s",model="%s",serial="%s"} %s\n' \
-            "$d" "$usedtype" "$model" "$serial" "$healthy" >> "$f_health"
+          case " $acked " in
+            *" $serial "*) ack=true ;;
+            *) ack=false ;;
+          esac
+
+          printf 'smartmon_device_smart_healthy{disk="%s",type="%s",model="%s",serial="%s",acknowledged="%s"} %s\n' \
+            "$d" "$usedtype" "$model" "$serial" "$ack" "$healthy" >> "$f_health"
           [ -n "$temp" ] && printf 'smartmon_temperature_celsius{disk="%s"} %s\n' "$d" "$temp" >> "$f_temp"
           [ -n "$poh" ] && printf 'smartmon_power_on_hours{disk="%s"} %s\n' "$d" "$poh" >> "$f_poh"
           printf 'smartmon_smartctl_run{disk="%s"} %s\n' "$d" "$(${pkgs.coreutils}/bin/date +%s)" >> "$f_run"
+
+          # NVMe health log. The overall verdict is just "any critical-warning
+          # bit set", so it can't tell "worn past rated endurance but fine"
+          # (headless) from "about to go read-only". Export the parts so alerts
+          # can still catch an acknowledged disk getting worse.
+          cw="$(echo "$info" | $jq -r '.nvme_smart_health_information_log.critical_warning // empty')"
+          if [ -n "$cw" ]; then
+            bit=0
+            for flag in available_spare temperature reliability_degraded read_only volatile_memory_backup; do
+              printf 'smartmon_nvme_critical_warning{disk="%s",flag="%s"} %d\n' "$d" "$flag" $(( (cw >> bit) & 1 )) >> "$f_cw"
+              bit=$((bit + 1))
+            done
+            echo "$info" | $jq -r --arg d "$d" '.nvme_smart_health_information_log
+              | "smartmon_nvme_media_errors{disk=\"\($d)\"} \(.media_errors)"' >> "$f_media"
+            echo "$info" | $jq -r --arg d "$d" '.nvme_smart_health_information_log
+              | "smartmon_nvme_percentage_used{disk=\"\($d)\"} \(.percentage_used)"' >> "$f_used"
+            echo "$info" | $jq -r --arg d "$d" '.nvme_smart_health_information_log
+              | "smartmon_nvme_available_spare_percent{disk=\"\($d)\",kind=\"current\"} \(.available_spare)",
+                "smartmon_nvme_available_spare_percent{disk=\"\($d)\",kind=\"threshold\"} \(.available_spare_threshold)"' >> "$f_spare"
+          fi
         done
 
     {
@@ -164,6 +203,18 @@ let
       echo "# HELP smartmon_smartctl_run Unix timestamp of the last smartctl run per device."
       echo "# TYPE smartmon_smartctl_run gauge"
       ${pkgs.coreutils}/bin/cat "$f_run"
+      echo "# HELP smartmon_nvme_critical_warning NVMe critical-warning bits, one series per flag (1 = set)."
+      echo "# TYPE smartmon_nvme_critical_warning gauge"
+      ${pkgs.coreutils}/bin/cat "$f_cw"
+      echo "# HELP smartmon_nvme_media_errors NVMe media and data integrity errors (lifetime count)."
+      echo "# TYPE smartmon_nvme_media_errors gauge"
+      ${pkgs.coreutils}/bin/cat "$f_media"
+      echo "# HELP smartmon_nvme_percentage_used NVMe estimate of rated endurance used (can exceed 100)."
+      echo "# TYPE smartmon_nvme_percentage_used gauge"
+      ${pkgs.coreutils}/bin/cat "$f_used"
+      echo "# HELP smartmon_nvme_available_spare_percent NVMe spare capacity left (kind=current) and the vendor threshold (kind=threshold)."
+      echo "# TYPE smartmon_nvme_available_spare_percent gauge"
+      ${pkgs.coreutils}/bin/cat "$f_spare"
     } > "$tmp"
 
     ${pkgs.coreutils}/bin/chmod 0644 "$tmp"
@@ -172,46 +223,60 @@ let
   '';
 in
 {
-  # Ensure the textfile directory exists (also a hostPath in values.yaml).
-  systemd.tmpfiles.rules = [
-    "d ${textfileDir} 0755 root root -"
-  ];
-
-  systemd.services.zfs-textfile-metrics = {
-    description = "Write ZFS pool health metrics for node-exporter's textfile collector";
-    after = [ "zfs.target" ];
-    serviceConfig = {
-      Type = "oneshot";
-      ExecStart = zfsTextfileScript;
-    };
+  options.systems.monitoring.smart.acknowledgedFailingSerials = lib.mkOption {
+    type = lib.types.listOf lib.types.str;
+    default = [ ];
+    example = [ "S29NNXAH395193" ];
+    description = ''
+      Serial numbers of disks whose FAILED SMART verdict is known and accepted
+      (e.g. a worn-out SSD in a disposable node). They are labelled
+      acknowledged="true", which SmartDeviceUnhealthy skips so it doesn't page
+      forever; the NVMe wear alerts still fire if the disk gets worse.
+    '';
   };
 
-  systemd.timers.zfs-textfile-metrics = {
-    description = "Periodically refresh ZFS textfile metrics";
-    wantedBy = [ "timers.target" ];
-    timerConfig = {
-      OnBootSec = "1min";
-      OnUnitActiveSec = "1min";
-      Persistent = true;
-    };
-  };
+  config = {
+    # Ensure the textfile directory exists (also a hostPath in values.yaml).
+    systemd.tmpfiles.rules = [
+      "d ${textfileDir} 0755 root root -"
+    ];
 
-  systemd.services.smart-textfile-metrics = {
-    description = "Write SMART disk-health metrics for node-exporter's textfile collector";
-    serviceConfig = {
-      Type = "oneshot";
-      ExecStart = smartTextfileScript;
+    systemd.services.zfs-textfile-metrics = {
+      description = "Write ZFS pool health metrics for node-exporter's textfile collector";
+      after = [ "zfs.target" ];
+      serviceConfig = {
+        Type = "oneshot";
+        ExecStart = zfsTextfileScript;
+      };
     };
-  };
 
-  systemd.timers.smart-textfile-metrics = {
-    description = "Periodically refresh SMART textfile metrics";
-    wantedBy = [ "timers.target" ];
-    timerConfig = {
-      OnBootSec = "2min";
-      # SMART attributes change slowly; every 5 minutes is plenty.
-      OnUnitActiveSec = "5min";
-      Persistent = true;
+    systemd.timers.zfs-textfile-metrics = {
+      description = "Periodically refresh ZFS textfile metrics";
+      wantedBy = [ "timers.target" ];
+      timerConfig = {
+        OnBootSec = "1min";
+        OnUnitActiveSec = "1min";
+        Persistent = true;
+      };
+    };
+
+    systemd.services.smart-textfile-metrics = {
+      description = "Write SMART disk-health metrics for node-exporter's textfile collector";
+      serviceConfig = {
+        Type = "oneshot";
+        ExecStart = smartTextfileScript;
+      };
+    };
+
+    systemd.timers.smart-textfile-metrics = {
+      description = "Periodically refresh SMART textfile metrics";
+      wantedBy = [ "timers.target" ];
+      timerConfig = {
+        OnBootSec = "2min";
+        # SMART attributes change slowly; every 5 minutes is plenty.
+        OnUnitActiveSec = "5min";
+        Persistent = true;
+      };
     };
   };
 }

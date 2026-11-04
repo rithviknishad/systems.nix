@@ -10,6 +10,7 @@
 # admin kubeconfig (modules/jumpbox.nix), Home Manager (which brings the
 # user's SSH key), and nh. Plus k3s agent (modules/k3s-agent.nix): joins
 # avocado over the tailnet, tainted so workloads only land here by opting in.
+# Plus host ZFS/SMART metrics for node-exporter (modules/monitoring.nix).
 #
 # LAN NIC: enp0s25 (Intel I218-V, MAC 94:c6:91:14:ea:af). DHCP with no router
 # reservation — if the address moves, find it again by MAC:
@@ -33,6 +34,8 @@
     # 2026-11-04; see docs/nodes.md). `git pull` there before `nh os switch`.
     ../../modules/nh.nix
     ../../modules/k3s-agent.nix
+    # Host ZFS + SMART textfile metrics for node-exporter (docs/monitoring.md).
+    ../../modules/monitoring.nix
     ../../users/rithviknishad.nix
   ];
 
