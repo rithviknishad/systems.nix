@@ -61,6 +61,11 @@ in
       "tailscaled.service"
       "tailscaled-autoconnect.service"
       "k3s.service"
+      # Serialise with the other `tailscale serve` writer: both read-modify-write
+      # tailscaled's single serve config, and starting together (boot, or any
+      # activation that restarts tailscaled) fails one with "Preconditions
+      # failed: etag mismatch". Ordering only; no dependency is pulled in.
+      "zerodha-kite-tailscale-serve.service"
     ];
     wants = [ "tailscaled.service" ];
     wantedBy = [ "multi-user.target" ];

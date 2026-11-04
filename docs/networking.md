@@ -122,6 +122,12 @@ Both stay private: the MagicDNS name resolves only inside the tailnet, and the
 NodePort range is deliberately **not** in `allowedTCPPorts` above, so the
 backends are unreachable from the LAN/WAN.
 
+The two oneshots are **ordered** (settle-up's runs `After=` zerodha-kite's).
+They read-modify-write tailscaled's one serve config, and starting them
+together (at boot, or in a deploy that restarts tailscaled) failed one with
+`Preconditions failed: etag mismatch`. A future third writer needs the same
+ordering.
+
 {: .note }
 > **These two ports are the whole budget.** `tailscale serve` only allows HTTPS
 > on **443**, **8443**, and **10000** — and `:443` is already taken by k3s's
