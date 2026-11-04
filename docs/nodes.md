@@ -240,6 +240,8 @@ Monitoring for g8way and headless (`k8s/monitoring/`, `modules/monitoring.nix`):
   NVMe health-log alerts (`SmartNvmeCriticalWarning`,
   `SmartNvmeMediaErrorsIncreasing`) still page if it gets worse. See
   [Monitoring](monitoring.md#smart-smart-vmrulesyaml).
+- **Logs.** Vector tolerates the opt-in taint, so pod logs on the agents are
+  shipped to VictoriaLogs too.
 - **Node down.** No new rules needed: the chart's defaults already cover the
   agents (`KubeNodeNotReady`, `KubeNodeUnreachable`, `KubeletDown`, and
   `TargetDown` for their node-exporter), as do the node-exporter rules
@@ -301,8 +303,8 @@ What that means for the system pods:
 - **node-exporter runs everywhere.** It tolerates every `NoSchedule` taint,
   which is how the agents show up in metrics. vmagent scrapes it over the
   tailnet.
-- **vector (logs) doesn't.** It has no tolerations, so agent logs aren't
-  shipped until phase 4 adds one.
+- **vector (logs) runs there too**, since phase 4 gave it a toleration for
+  the opt-in taint, so agent pods' logs reach VictoriaLogs.
 - Taints and labels from `--node-taint`/`--node-label` apply only when a node
   **first registers**. Change them on an existing node with `kubectl taint` /
   `kubectl label`.

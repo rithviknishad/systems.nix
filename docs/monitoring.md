@@ -12,7 +12,8 @@ It's built on **VictoriaMetrics** (a Prometheus-compatible TSDB), **Grafana**,
 push notifications. It lives in `k8s/monitoring/` and mirrors
 [`tellmeY18/retire.nix`](https://github.com/tellmeY18/retire.nix), adapted
 to this cluster: avocado runs the whole stack, and the k3s agents
-([g8way, headless](nodes.md)) are watched through their node-exporter.
+([g8way, headless](nodes.md)) are watched through their node-exporter and
+Vector.
 
 ## Big picture
 
@@ -313,6 +314,11 @@ labels, and ships them to **VictoriaLogs** via its Elasticsearch bulk endpoint.
 Query them in Grafana's **Explore** using the provisioned *VictoriaLogs*
 datasource, or `just mon-logs` (→ `http://localhost:9428/select/vmui`). Both
 Vector's and VictoriaLogs' own metrics are scraped back into VMSingle.
+
+Vector tolerates the agents' `rithviknishad.dev/opt-in` taint (only that one,
+not a blanket `Exists` like node-exporter), so it runs on g8way and headless
+too and their pods' logs land in the same VictoriaLogs on avocado. Filter by
+node with the `kubernetes.pod_node_name` field.
 
 ## Uptime (Gatus)
 

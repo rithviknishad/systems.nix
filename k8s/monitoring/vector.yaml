@@ -104,6 +104,14 @@ spec:
         checksum/config: config-v1
     spec:
       serviceAccountName: vector
+      # Ship logs from the opt-in k3s agents too (g8way, headless; see
+      # docs/nodes.md). Only the opt-in taint is tolerated, not a blanket
+      # `operator: Exists` like node-exporter's, so a node tainted for some
+      # other reason later isn't silently included.
+      tolerations:
+        - key: rithviknishad.dev/opt-in
+          operator: Exists
+          effect: NoSchedule
       containers:
         - name: vector
           image: timberio/vector:0.50.0-alpine

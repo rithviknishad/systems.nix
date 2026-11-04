@@ -1,8 +1,10 @@
 # values.yaml — victoria-metrics-k8s-stack chart values for avocado.
 #
-# Adapted from tellmeY18/retire.nix (chart 0.78.0) for a single-node k3s host:
+# Adapted from tellmeY18/retire.nix (chart 0.78.0) for avocado's k3s cluster:
 #   - Storage: k3s built-in `local-path` (not OpenEBS zfs-localpv).
-#   - No node taints/affinity (single node).
+#   - Everything here is untainted-only, so it all lands on avocado; only
+#     node-exporter (and Vector, see vector.yaml) also run on the tainted
+#     opt-in agents g8way/headless (docs/nodes.md).
 #   - Alertmanager routes to the ntfy-alertmanager bridge -> ntfy.sh.
 #   - Prometheus CRD converter DISABLED; native VM CRDs only.
 #   - k3s doesn't expose etcd/scheduler/controller-manager as separate
